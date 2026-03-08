@@ -1,7 +1,6 @@
 // --- DATABASE INITIALIZATION ---
 let database = { players: [] };
 
-// Professional Fetch: Loads 20,000 players from your separate file
 async function loadDatabase() {
     try {
         const response = await fetch('players.json');
@@ -10,7 +9,6 @@ async function loadDatabase() {
         console.log("Success! Loaded " + database.players.length + " players.");
     } catch (err) {
         console.error("Database error:", err);
-        // Fallback for testing if file is missing
         database.players = [{ name: "Cristiano Ronaldo", clubs: ["Real Madrid", "Juventus", "Al Nassr"] }];
     }
 }
@@ -53,13 +51,11 @@ const game = {
             this.updateUI();
             if (this.timeLeft <= 0) {
                 clearInterval(this.timer);
-                ui.addLog("SYSTEM", `${this.players[this.turnIndex].toUpperCase()} was too slow! 🟥`, "eliminated");
                 this.eliminate();
             }
         }, 1000);
     },
 
-    // UPDATED: Now ignores spaces during comparison
     simplify: (s) => s.toLowerCase().replace(/\s+/g, "").replace(/[^a-z0-9]/g, ""),
 
     handleInput() {
@@ -73,12 +69,12 @@ const game = {
     submitMove(val) {
         const cleanVal = this.simplify(val);
         if (this.used.includes(cleanVal)) return alert("Already used!");
+        
         let linked = false;
         const targetClean = this.simplify(this.target);
-        
         const tP = database.players.find(p => this.simplify(p.name) === targetClean);
-        if (tP && tP.clubs.some(c => this.simplify(c) === cleanVal)) linked = true;
         
+        if (tP && tP.clubs.some(c => this.simplify(c) === cleanVal)) linked = true;
         if (!linked) {
             const iP = database.players.find(p => this.simplify(p.name) === cleanVal);
             if (iP && iP.clubs.some(c => this.simplify(c) === targetClean)) linked = true;
@@ -86,8 +82,9 @@ const game = {
 
         if (linked) {
             if (this.mode === 'online') {
-                // FIXED: Send data and process locally so your message shows immediately
+                // Send move to server/host
                 online.sendData({ type: 'MOVE', move: val, user: online.myName });
+                // Process locally so YOU see it immediately
                 this.processMove(online.myName, val);
             } else {
                 this.processMove(this.players[this.turnIndex], val);
@@ -100,29 +97,12 @@ const game = {
     processMove(user, move) {
         ui.addLog(user, move, user === "AI Bot" ? "ai" : "player");
         this.target = move;
-        const cleanMove = this.simplify(move);
-        this.used.push(cleanMove);
+        this.used.push(this.simplify(move));
         if (this.used.length > this.lockLimit) this.used.shift(); 
         
         this.turnIndex = (this.turnIndex + 1) % this.players.length;
-        this.startTimer();
+        this.startTimer(); // This restarts the timer for everyone
         if (this.mode === 'ai' && this.players[this.turnIndex] === "AI Bot") setTimeout(() => this.aiThink(), 1200);
-    },
-
-    // Rest of game logic (init, eliminate, win, etc.) stays as you had it...
-    startLocal() {
-        const inputs = document.querySelectorAll('.local-p-name');
-        this.players = Array.from(inputs).map(i => i.value.trim()).filter(v => v !== "");
-        if (this.players.length < 2) return alert("Please enter at least 2 player names!");
-        this.mode = 'local';
-        this.init();
-    },
-
-    startAI() {
-        const n = document.getElementById('player-nickname').value || "You";
-        this.players = [n, "AI Bot"];
-        this.mode = 'ai';
-        this.init();
     },
 
     init() {
@@ -134,7 +114,8 @@ const game = {
     },
 
     eliminate() {
-        ui.addLog(this.players[this.turnIndex], "Eliminated! 🟥", "eliminated");
+        const loser = this.players[this.turnIndex];
+        ui.addLog(loser, "Eliminated! 🟥", "eliminated");
         this.players.splice(this.turnIndex, 1);
         if (this.players.length <= 1) {
             this.win(this.players[0] || "Nobody");
@@ -154,6 +135,7 @@ const game = {
 // --- ONLINE / MULTIPLAYER LOGIC ---
 const online = {
     peer: null, connections: [], myName: "", isHost: false, activeConn: null,
+    
     createRoom() {
         this.myName = document.getElementById('player-nickname').value || "Host";
         const code = Math.floor(1000 + Math.random() * 9000).toString();
@@ -165,17 +147,27 @@ const online = {
             document.getElementById('start-online-btn').style.display = "block";
             ui.updateLobby();
         });
-        this.peer.on('connection', c => { this.connections.push(c); this.setup(c); });
+        this.peer.on('connection', c => { 
+            this.connections.push(c); 
+            this.setup(c); 
+        });
     },
+
     joinRoom() {
         const code = document.getElementById('join-id').value;
         this.myName = document.getElementById('player-nickname').value || "Guest";
         this.peer = new Peer();
-        this.peer.on('open', () => { this.setup(this.peer.connect(code)); });
+        this.peer.on('open', () => { 
+            const conn = this.peer.connect(code);
+            this.activeConn = conn;
+            this.setup(conn); 
+        });
     },
+
     setup(c) {
-        this.activeConn = c; // FIXED: Set connection for Guest immediately
-        c.on('open', () => { if (!this.isHost) { c.send({ type: 'JOIN', name: this.myName }); } });
+        c.on('open', () => { 
+            if (!this.isHost) c.send({ type: 'JOIN', name: this.myName }); 
+        });
         c.on('data', data => {
             if (data.type === 'JOIN' && this.isHost) {
                 game.players.push(data.name);
@@ -184,15 +176,30 @@ const online = {
             }
             if (data.type === 'LOBBY') { game.players = data.list; ui.updateLobby(); }
             if (data.type === 'START') { game.mode = 'online'; game.init(); }
+            
             if (data.type === 'MOVE') {
-                // FIXED: Only process moves from the OTHER player
-                if (data.user !== this.myName) game.processMove(data.user, data.move);
+                // 1. If I'm the Host, I must tell EVERYONE else about this move
+                if (this.isHost) {
+                    this.broadcast(data); 
+                }
+                // 2. Only show the move if it's not from me (to prevent double messages)
+                if (data.user !== this.myName) {
+                    game.processMove(data.user, data.move);
+                }
             }
         });
     },
+
     broadcast(d) { this.connections.forEach(c => c.send(d)); },
-    sendData(d) { if (this.isHost) this.broadcast(d); else if (this.activeConn) this.activeConn.send(d); },
-    broadcastStart() { this.broadcast({ type: 'START' }); game.mode = 'online'; game.init(); }
+    sendData(d) { 
+        if (this.isHost) this.broadcast(d); 
+        else if (this.activeConn) this.activeConn.send(d); 
+    },
+    broadcastStart() { 
+        this.broadcast({ type: 'START' }); 
+        game.mode = 'online'; 
+        game.init(); 
+    }
 };
 
 // --- UI HELPERS ---
@@ -216,27 +223,21 @@ const ui = {
 };
 
 // --- INPUT & SEARCH OPTIMIZATION ---
-const inputField = document.getElementById('user-input');
-const suggBox = document.getElementById('custom-suggestions');
-
 inputField.addEventListener('input', (e) => {
     const val = e.target.value.toLowerCase().trim();
     suggBox.innerHTML = '';
     
-    // UPDATED: Show suggestions from the first letter
     if (val.length < 1) { 
         suggBox.style.display = 'none'; 
         return; 
     }
 
-    // UPDATED: Ignore spaces in search (e.g., "al n" -> "aln")
-    const cleanSearch = val.replace(/\s+/g, "");
-
+    const cleanSearch = val.replace(/\s+/g, ""); 
     const matches = [];
+
     for (let i = 0; i < database.players.length; i++) {
         const p = database.players[i];
         const cleanPlayer = p.name.toLowerCase().replace(/\s+/g, "");
-        
         if (cleanPlayer.includes(cleanSearch)) matches.push(p.name);
         
         for (let j = 0; j < p.clubs.length; j++) {
