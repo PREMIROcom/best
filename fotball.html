@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Football Chain ⚽</title>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;700;900&family=Barlow:wght@400;500;600&display=swap" >
+        <style>
+        :root {
+    --pitch: #0d5c2e;
+    --pitch-bright: #1a8a44;
+    --pitch-glow: #2ecc71;
+    --turf: #0a3d1f;
+    --bg: #080f0b;
+    --card: #0e1a12;
+    --card-raised: #132019;
+    --gold: #f5c842;
+    --gold-dim: #b8932f;
+    --red: #e63946;
+    --blue: #4cc9f0;
+    --text: #e8f5ee;
+    --text-dim: #7aab8a;
+    --border: #1e3827;
+    --stripe-light: rgba(255,255,255,0.025);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+    font-family: 'Barlow', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    display: flex;
+    justify-content: center;
+    min-height: 100vh;
+    overflow: hidden;
+    background-image: repeating-linear-gradient(
+        180deg,
+        transparent 0px,
+        transparent 40px,
+        var(--stripe-light) 40px,
+        var(--stripe-light) 80px
+    );
+}
+
+#app {
+    width: 100%;
+    max-width: 480px;
+    height: 100vh;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+}
+
+.screen { display: none; padding: 20px; flex-direction: column; height: 100%; box-sizing: border-box; overflow-y: auto; }
+.active { display: flex; }
+.screen::-webkit-scrollbar { width: 4px; }
+.screen::-webkit-scrollbar-track { background: transparent; }
+.screen::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+.logo-wrap { text-align: center; margin-bottom: 24px; padding-top: 16px; }
+.logo-ball { font-size: 2.8rem; display: block; margin-bottom: 4px; animation: bounce 2s ease-in-out infinite; }
+
+@keyframes bounce {
+    0%,100% { transform: translateY(0); }
+    50% { transform: translateY(-8px); }
+}
+
+.logo-title {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 3.2rem;
+    font-weight: 900;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    line-height: 0.85;
+    background: linear-gradient(160deg, #fff 0%, var(--pitch-glow) 60%, var(--gold) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    filter: drop-shadow(0 0 18px rgba(46,204,113,0.4));
+}
+
+.logo-sub {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 0.75rem;
+    letter-spacing: 0.3em;
+    color: var(--text-dim);
+    margin-top: 6px;
+    text-transform: uppercase;
+}
+
+.panel {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 18px;
+    margin-bottom: 12px;
+    position: relative;
+    overflow: hidden;
+}
+
+.panel::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--pitch-glow), transparent);
+    opacity: 0.5;
+}
+
+.panel-title {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 0.65rem;
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin-bottom: 12px;
+}
+
+.field-input {
+    background: var(--turf);
+    border: 1.5px solid var(--border);
+    color: var(--text);
+    padding: 13px 16px;
+    border-radius: 10px;
+    font-size: 15px;
+    font-family: 'Barlow', sans-serif;
+    margin-bottom: 10px;
+    width: 100%;
+    transition: border-color 0.2s, box-shadow 0.2s;
+    outline: none;
+}
+
+.field-input:focus {
+    border-color: var(--pitch-glow);
+    box-shadow: 0 0 0 3px rgba(46,204,113,0.15);
+}
+
+.field-input::placeholder { color: var(--text-dim); }
+
+.btn {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 1rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: white;
+    background: var(--pitch-bright);
+    border: none;
+    padding: 14px 20px;
+    border-radius: 10px;
+    cursor: pointer;
+    width: 100%;
+    margin-bottom: 8px;
+    position: relative;
+    overflow: hidden;
+    transition: transform 0.12s, box-shadow 0.12s, background 0.15s;
+    box-shadow: 0 4px 15px rgba(26,138,68,0.3);
+}
+
+.btn::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(180deg, rgba(255,255,255,0.07) 0%, transparent 60%);
+    pointer-events: none;
+}
+
+.btn:hover { background: #22a854; box-shadow: 0 6px 20px rgba(26,138,68,0.4); }
+.btn:active { transform: scale(0.96); box-shadow: none; }
+
+.btn-gold { background: var(--gold); color: #1a1200; box-shadow: 0 4px 15px rgba(245,200,66,0.3); }
+.btn-gold:hover { background: #f7d050; box-shadow: 0 6px 20px rgba(245,200,66,0.4); }
+
+.btn-blue { background: #1a6fa8; box-shadow: 0 4px 15px rgba(76,201,240,0.2); }
+.btn-blue:hover { background: #2080c0; }
+
+.btn-ghost { background: transparent; border: 1.5px solid var(--border); color: var(--text-dim); box-shadow: none; }
+.btn-ghost:hover { border-color: var(--text-dim); color: var(--text); background: rgba(255,255,255,0.04); }
+
+.btn-danger { background: transparent; border: 1.5px solid var(--red); color: var(--red); box-shadow: none; }
+.btn-danger:hover { background: rgba(230,57,70,0.1); }
+
+.join-row { display: flex; gap: 8px; margin-bottom: 10px; }
+.join-row .field-input { margin-bottom: 0; flex: 1; }
+.join-row .btn { width: auto; margin-bottom: 0; padding: 13px 20px; white-space: nowrap; }
+
+#room-code-display {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 2rem;
+    font-weight: 900;
+    letter-spacing: 0.3em;
+    color: var(--gold);
+    text-align: center;
+    padding: 10px 0 4px;
+    text-shadow: 0 0 20px rgba(245,200,66,0.5);
+}
+
+#lobby-list { font-size: 0.8rem; color: var(--text-dim); text-align: center; padding-bottom: 4px; }
+
+#turn-status {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 1.5rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-align: center;
+    padding: 14px 20px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    margin-bottom: 12px;
+    position: relative;
+    overflow: hidden;
+}
+
+#turn-status .turn-name { color: var(--pitch-glow); }
+#turn-status .turn-time { color: var(--gold); font-size: 1rem; }
+
+.timer-bar {
+    position: absolute;
+    bottom: 0; left: 0;
+    height: 3px;
+    background: linear-gradient(90deg, var(--pitch-glow), var(--gold));
+    transition: width 0.9s linear;
+    border-radius: 0 0 12px 12px;
+}
+
+.timer-bar.urgent { background: linear-gradient(90deg, var(--red), #ff6b6b); }
+
+#game-feed {
+    flex: 1;
+    min-height: 0;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px;
+    overflow-y: auto;
+    margin-bottom: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+#game-feed::-webkit-scrollbar { width: 4px; }
+#game-feed::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+.log-entry {
+    font-size: 0.88rem;
+    padding: 6px 10px;
+    border-radius: 7px;
+    background: rgba(255,255,255,0.025);
+    animation: fadeSlide 0.25s ease;
+    line-height: 1.35;
+}
+
+@keyframes fadeSlide {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.log-entry .log-user {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 0.75rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    display: block;
+    margin-bottom: 1px;
+}
+
+.log-entry .log-msg {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 1rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+}
+
+.log-entry.system { background: rgba(46,204,113,0.08); border-left: 2px solid var(--pitch-glow); }
+.log-entry.eliminated { background: rgba(230,57,70,0.08); border-left: 2px solid var(--red); }
+
+.input-area { display: flex; flex-direction: column; gap: 8px; }
+.input-area .field-input { margin-bottom: 0; font-size: 16px; }
+
+.submit-btn-row { display: flex; gap: 8px; }
+.submit-btn-row .btn { margin-bottom: 0; flex: 1; font-size: 1.05rem; padding: 15px; }
+
+#local-player-list { margin-bottom: 10px; }
+
+.player-field-wrap { position: relative; margin-bottom: 8px; }
+
+.player-field-wrap::before {
+    content: attr(data-num);
+    position: absolute;
+    left: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: var(--pitch-glow);
+    letter-spacing: 0.05em;
+    pointer-events: none;
+}
+
+.player-field-wrap .field-input { padding-left: 36px; margin-bottom: 0; }
+
+.overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.92);
+    display: none;
+    justify-content: center;
+    align-items: center;
+    flex-direction: column;
+    z-index: 100;
+    backdrop-filter: blur(6px);
+    gap: 16px;
+}
+
+.victory-trophy { font-size: 5rem; animation: trophySpin 1s ease-out forwards; }
+
+@keyframes trophySpin {
+    0% { transform: scale(0) rotate(-180deg); opacity: 0; }
+    60% { transform: scale(1.2) rotate(10deg); opacity: 1; }
+    100% { transform: scale(1) rotate(0deg); opacity: 1; }
+}
+
+.victory-label {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 0.75rem;
+    letter-spacing: 0.4em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+}
+
+#winner-name {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 3rem;
+    font-weight: 900;
+    letter-spacing: 0.06em;
+    text-align: center;
+    background: linear-gradient(130deg, var(--gold) 0%, #fff 60%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    filter: drop-shadow(0 0 20px rgba(245,200,66,0.6));
+    padding: 0 20px;
+}
+
+.victory-divider {
+    width: 80px; height: 2px;
+    background: linear-gradient(90deg, transparent, var(--gold), transparent);
+}
+
+.victory-btn {
+    width: 220px;
+    font-family: 'Barlow Condensed', sans-serif;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+}
+
+.section-divider {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 4px 0 10px;
+    color: var(--text-dim);
+    font-size: 0.7rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+}
+
+.section-divider::before, .section-divider::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+}
+
+/* Custom Mini-List styling */
+.custom-dropdown {
+    position: absolute;
+    bottom: 100%; /* Sits on top of the input */
+    left: 0;
+    right: 0;
+    background: #132019; /* Matches your --card-raised */
+    border: 1px solid #2ecc71; /* Matches your --pitch-glow */
+    border-radius: 8px;
+    max-height: 110px; /* Small enough to see the game */
+    overflow-y: auto;
+    display: none; 
+    z-index: 1000;
+}
+
+.dropdown-item {
+    padding: 10px;
+    border-bottom: 1px solid #1e3827;
+    font-size: 14px;
+    cursor: pointer;
+}
+
+.dropdown-item:active { background: #1a8a44; }
+
+/* Anchor for the dropdown */
+.input-area { position: relative; }
+
+/* Styling for the elimination message in the feed */
+.log-entry.eliminated {
+    background: rgba(230, 57, 70, 0.2); 
+    border-left: 4px solid #e63946; /* Red Card Color */
+    color: #ff6b6b;
+    font-weight: bold;
+    animation: shake 0.5s ease-in-out;
+}
+
+@keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    25% { transform: translateX(-5px); }
+    75% { transform: translateX(5px); }
+}
+
+#timer {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 1.5rem;
+    font-weight: 900;
+    color: var(--gold);
+    text-shadow: 0 0 10px rgba(245, 200, 66, 0.5);
+    background: rgba(0, 0, 0, 0.3);
+    padding: 2px 10px;
+    border-radius: 5px;
+    border: 1px solid var(--border);
+}
+        </style>
+</head>
+<body>
+
+<div id="app">
+
+    <!-- HOME SCREEN -->
+    <div id="screen-home" class="screen active">
+        <div class="logo-wrap">
+            <span class="logo-ball">⚽</span>
+            <div class="logo-title">Football<br>Chain</div>
+            <div class="logo-sub">The Ultimate Footballer Quiz</div>
+        </div>
+
+        <div class="panel">
+            <div class="panel-title">🌐 Online Multiplayer</div>
+            <input type="text" id="player-nickname" class="field-input" placeholder="Your Nickname">
+            <button class="btn" onclick="online.createRoom()">Create Room</button>
+            <div class="join-row">
+                <input type="number" id="join-id" class="field-input" placeholder="4-Digit Code">
+                <button class="btn btn-gold" onclick="online.joinRoom()">Join</button>
+            </div>
+            <div id="room-code-display"></div>
+            <div id="lobby-list"></div>
+            <button id="start-online-btn" class="btn" style="display:none; margin-top:8px;" onclick="online.broadcastStart()">⚡ Start Match for All</button>
+        </div>
+
+        <div class="section-divider">or play locally</div>
+
+        <button class="btn btn-ghost" onclick="ui.showScreen('screen-local-setup')">👥 Local Pass &amp; Play</button>
+        <button class="btn btn-blue" onclick="game.startAI()">🤖 vs AI Mode</button>
+    </div>
+    
+
+    <!-- LOCAL SETUP SCREEN -->
+    <div id="screen-local-setup" class="screen">
+        <div style="margin-bottom:20px; padding-top:10px;">
+            <div class="logo-sub" style="margin-bottom:6px;">Local Match</div>
+            <h3 style="font-family:'Barlow Condensed',sans-serif;font-size:1.8rem;font-weight:900;letter-spacing:0.05em;text-transform:uppercase;">Player Setup</h3>
+        </div>
+        <div id="local-player-list">
+            <div class="player-field-wrap" data-num="P1">
+                <input type="text" class="field-input local-p-name" placeholder="Player 1 Name">
+            </div>
+            <div class="player-field-wrap" data-num="P2">
+                <input type="text" class="field-input local-p-name" placeholder="Player 2 Name">
+            </div>
+        </div>
+        <button class="btn btn-ghost" onclick="ui.addLocalPlayerField()">+ Add Another Player</button>
+        <div style="flex:1"></div>
+        <button class="btn" onclick="game.startLocal()">⚽ Kick Off!</button>
+        <button class="btn btn-danger" onclick="ui.showScreen('screen-home')">← Back</button>
+    </div>
+
+    <!-- GAME SCREEN -->
+    <div id="screen-game" class="screen">
+        <div id="turn-status">
+    <span class="turn-name" id="active-player-display">READY?</span>
+    <div id="timer">0:20</div> 
+    <div class="timer-bar" id="timer-bar"></div>
+</div>
+        <div id="game-feed"></div>
+        <div class="input-area">
+    <div id="custom-suggestions" class="custom-dropdown"></div>
+
+    <input type="text" id="user-input" class="field-input" placeholder="Type..." autocomplete="off">
+    
+    <div class="submit-btn-row">
+        <button class="btn" id="one-club-btn" onclick="game.handleOneClub()">ONE CLUB PLAYER</button>
+        <button class="btn" onclick="game.handleInput()">Submit</button>
+    </div>
+</div>
+        
+    </div>
+
+</div>
+
+<!-- VICTORY OVERLAY -->
+<div id="victory-screen" class="overlay">
+    <div class="victory-trophy">🏆</div>
+    <div class="victory-label">Champion</div>
+    <div id="winner-name">WINNER!</div>
+    <div class="victory-divider"></div>
+    <button class="btn btn-gold victory-btn" onclick="location.reload()">Back to Menu</button>
+</div>
+<script src="script.js"></script>
+</body>
+</html>
