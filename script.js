@@ -9,6 +9,7 @@ async function loadDatabase() {
         console.log("Success! Loaded " + database.players.length + " players.");
     } catch (err) {
         console.error("Database error:", err);
+        // Fallback for testing
         database.players = [{ name: "Cristiano Ronaldo", clubs: ["Real Madrid", "Juventus", "Al Nassr"] }];
     }
 }
@@ -123,6 +124,7 @@ const game = {
         }
 
         if (linked) {
+            // FIX 1: Send move to network if online
             if (this.mode === 'online') {
                 online.sendData({ type: 'MOVE', move: val, user: online.myName });
             } else {
@@ -148,30 +150,28 @@ const game = {
         if (this.mode === 'ai' && this.players[this.turnIndex] === "AI Bot") setTimeout(() => this.aiThink(), 1200);
     },
         
+    // FIX 2: AI now scans ALL players and picks one RANDOMLY
     aiThink() {
         const targetClean = this.simplify(this.target);
-        const possibleChoices = [];
+        let possibleChoices = [];
 
-        // 1. Gather ALL players who played for the target club
-        database.players.forEach(p => {
-            const hasClub = p.clubs.some(c => this.simplify(c) === targetClean);
-            if (hasClub && !this.used.includes(this.simplify(p.name))) {
-                possibleChoices.push(p.name);
-            }
-        });
-
-        // 2. Gather ALL clubs the target player played for
-        const pMatch = database.players.find(p => this.simplify(p.name) === targetClean);
-        if (pMatch) {
-            pMatch.clubs.forEach(club => {
-                if (!this.used.includes(this.simplify(club))) {
-                    possibleChoices.push(club);
-                }
+        // Scan for all clubs for target player
+        const playerMatch = database.players.find(p => this.simplify(p.name) === targetClean);
+        if (playerMatch) {
+            playerMatch.clubs.forEach(club => {
+                if (!this.used.includes(this.simplify(club))) possibleChoices.push(club);
             });
         }
 
-        // 3. Pick a random answer from the pool
+        // Scan for all players for target club
+        database.players.forEach(p => {
+            if (p.clubs.some(c => this.simplify(c) === targetClean)) {
+                if (!this.used.includes(this.simplify(p.name))) possibleChoices.push(p.name);
+            }
+        });
+
         if (possibleChoices.length > 0) {
+            // Pick random index from the full pool
             const randomIdx = Math.floor(Math.random() * possibleChoices.length);
             this.submitMove(possibleChoices[randomIdx]); 
         } else {
@@ -229,7 +229,7 @@ const online = {
         this.peer = new Peer();
         this.peer.on('open', () => { 
             const c = this.peer.connect(code);
-            this.activeConn = c; 
+            this.activeConn = c;
             this.setup(c); 
         });
     },
@@ -256,6 +256,7 @@ const online = {
                 game.init(); 
             }
             if (data.type === 'MOVE') {
+                // Host relays moves to all guests
                 if (this.isHost) this.broadcast(data); 
                 game.processMove(data.user, data.move);
             }
