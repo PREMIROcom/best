@@ -9,7 +9,6 @@ async function loadDatabase() {
         console.log("Success! Loaded " + database.players.length + " players.");
     } catch (err) {
         console.error("Database error:", err);
-        // Fallback for testing
         database.players = [{ name: "Cristiano Ronaldo", clubs: ["Real Madrid", "Juventus", "Al Nassr"] }];
     }
 }
@@ -25,6 +24,7 @@ const game = {
     turnIndex: 0, 
     timer: null, 
     timeLeft: 20,
+    isEliminated: false, 
 
     updateUI() {
         const name = this.players[this.turnIndex] || "?";
@@ -33,9 +33,23 @@ const game = {
         const nEl = document.querySelector('.turn-name');
         const tEl = document.getElementById('timer');
         const bEl = document.getElementById('timer-bar');
+        const inputArea = document.querySelector('.input-section');
 
         if (nEl) nEl.innerText = name.toUpperCase();
         if (tEl) tEl.textContent = `0:${t.toString().padStart(2, '0')}`;
+        
+        // FIX: Turn Lock & Spectator UI Logic
+        if (this.mode === 'online') {
+            const isMyTurn = (name === online.myName);
+            if (!isMyTurn || this.isEliminated) {
+                inputArea.style.opacity = "0.5";
+                inputArea.style.pointerEvents = "none";
+            } else {
+                inputArea.style.opacity = "1";
+                inputArea.style.pointerEvents = "all";
+            }
+        }
+
         if (bEl) {
             bEl.style.width = pct + "%";
             if (t <= 6) bEl.classList.add('urgent');
@@ -52,28 +66,11 @@ const game = {
             this.updateUI();
             if (this.timeLeft <= 0) {
                 clearInterval(this.timer);
-                ui.addLog("SYSTEM", `${this.players[this.turnIndex].toUpperCase()} was too slow! 🟥`, "eliminated");
-                this.eliminate();
+                if (this.mode !== 'online' || online.myName === this.players[this.turnIndex]) {
+                    this.eliminate();
+                }
             }
         }, 1000);
-    },
-
-    handleOneClub() {
-        const targetClean = this.simplify(this.target);
-        const pMatch = database.players.find(p => this.simplify(p.name) === targetClean);
-
-        if (pMatch && pMatch.clubs.length === 1) {
-            const onlyClub = pMatch.clubs[0];
-            ui.addLog(this.players[this.turnIndex], `LOYALTY! -> ${onlyClub.toUpperCase()}`, "system");
-            this.target = onlyClub;
-            this.addToUsed(onlyClub);
-            this.turnIndex = (this.turnIndex + 1) % this.players.length;
-            this.startTimer(); 
-            if (this.mode === 'ai' && this.players[this.turnIndex] === "AI Bot") setTimeout(() => this.aiThink(), 1200);
-        } else {
-            ui.addLog("SYSTEM", `${this.players[this.turnIndex].toUpperCase()} fake loyalty! 🟥`, "eliminated");
-            this.eliminate();
-        }
     },
 
     startLocal() {
@@ -93,6 +90,7 @@ const game = {
 
     init() {
         this.used = [this.simplify(this.target)];
+        this.isEliminated = false;
         ui.showScreen('screen-game');
         ui.addLog("SYSTEM", "Chain starts with: " + this.target, "system");
         this.updateUI();
@@ -110,11 +108,15 @@ const game = {
     },
 
     submitMove(val) {
+        // FIX: Prevent moves if it's not your turn or you are out
+        if (this.mode === 'online' && this.players[this.turnIndex] !== online.myName) return;
+        if (this.isEliminated) return;
+
         const cleanVal = this.simplify(val);
         if (this.used.includes(cleanVal)) return alert("Already used!");
+        
         let linked = false;
         const targetClean = this.simplify(this.target);
-        
         const tP = database.players.find(p => this.simplify(p.name) === targetClean);
         if (tP && tP.clubs.some(c => this.simplify(c) === cleanVal)) linked = true;
         
@@ -124,12 +126,48 @@ const game = {
         }
 
         if (linked) {
-            // FIX 1: Send move to network if online
             if (this.mode === 'online') {
                 online.sendData({ type: 'MOVE', move: val, user: online.myName });
             } else {
                 this.processMove(this.players[this.turnIndex], val);
             }
+        } else {
+            this.eliminate();
+        }
+    },
+
+    processMove(user, move) {
+        ui.addLog(user, move, user === "AI Bot" ? "ai" : "player");
+        this.target = move;
+        this.addToUsed(move);
+        this.turnIndex = (this.turnIndex + 1) % this.players.length;
+        this.startTimer();
+        if (this.mode === 'ai' && this.players[this.turnIndex] === "AI Bot") setTimeout(() => this.aiThink(), 1200);
+    },
+
+    aiThink() {
+        const targetClean = this.simplify(this.target);
+        let possibleChoices = [];
+        
+        // 1. Check all clubs for target player
+        const playerMatch = database.players.find(p => this.simplify(p.name) === targetClean);
+        if (playerMatch) {
+            playerMatch.clubs.forEach(club => {
+                if (!this.used.includes(this.simplify(club))) possibleChoices.push(club);
+            });
+        }
+        
+        // 2. Check all players for target club
+        database.players.forEach(p => {
+            if (p.clubs.some(c => this.simplify(c) === targetClean)) {
+                if (!this.used.includes(this.simplify(p.name))) possibleChoices.push(p.name);
+            }
+        });
+
+        // FIX: Pick a random option from the pool
+        if (possibleChoices.length > 0) {
+            const randomIdx = Math.floor(Math.random() * possibleChoices.length);
+            this.submitMove(possibleChoices[randomIdx]); 
         } else {
             this.eliminate();
         }
@@ -141,47 +179,27 @@ const game = {
         if (this.used.length > this.lockLimit) this.used.shift(); 
     },
 
-    processMove(user, move) {
-        ui.addLog(user, move, user === "AI Bot" ? "ai" : "player");
-        this.target = move;
-        this.addToUsed(move);
-        this.turnIndex = (this.turnIndex + 1) % this.players.length;
-        this.startTimer();
-        if (this.mode === 'ai' && this.players[this.turnIndex] === "AI Bot") setTimeout(() => this.aiThink(), 1200);
-    },
-        
-    // FIX 2: AI now scans ALL players and picks one RANDOMLY
-    aiThink() {
-        const targetClean = this.simplify(this.target);
-        let possibleChoices = [];
-
-        // Scan for all clubs for target player
-        const playerMatch = database.players.find(p => this.simplify(p.name) === targetClean);
-        if (playerMatch) {
-            playerMatch.clubs.forEach(club => {
-                if (!this.used.includes(this.simplify(club))) possibleChoices.push(club);
-            });
-        }
-
-        // Scan for all players for target club
-        database.players.forEach(p => {
-            if (p.clubs.some(c => this.simplify(c) === targetClean)) {
-                if (!this.used.includes(this.simplify(p.name))) possibleChoices.push(p.name);
-            }
-        });
-
-        if (possibleChoices.length > 0) {
-            // Pick random index from the full pool
-            const randomIdx = Math.floor(Math.random() * possibleChoices.length);
-            this.submitMove(possibleChoices[randomIdx]); 
-        } else {
-            this.eliminate();
-        }
-    },
-
     eliminate() {
-        ui.addLog(this.players[this.turnIndex], "Eliminated! 🟥", "eliminated");
-        this.players.splice(this.turnIndex, 1);
+        const playerOut = this.players[this.turnIndex];
+        if (this.mode === 'online') {
+            online.sendData({ type: 'ELIMINATE', user: playerOut });
+        } else {
+            this.processElimination(playerOut);
+        }
+    },
+
+    processElimination(user) {
+        ui.addLog(user, "Eliminated! 🟥", "eliminated");
+        
+        // FIX: Spectator status check
+        if (this.mode === 'online' && user === online.myName) {
+            this.isEliminated = true;
+            alert("You are out! You can now spectate.");
+        }
+
+        this.players.splice(this.players.indexOf(user), 1);
+
+        // FIX: Final win check (if 1 player remains, game over)
         if (this.players.length <= 1) {
             this.win(this.players[0] || "Nobody");
         } else {
@@ -200,11 +218,7 @@ const game = {
 
 // --- ONLINE / MULTIPLAYER LOGIC ---
 const online = {
-    peer: null, 
-    connections: [], 
-    activeConn: null, 
-    myName: "", 
-    isHost: false,
+    peer: null, connections: [], activeConn: null, myName: "", isHost: false,
 
     createRoom() {
         this.myName = document.getElementById('player-nickname').value || "Host";
@@ -217,10 +231,7 @@ const online = {
             document.getElementById('start-online-btn').style.display = "block";
             ui.updateLobby();
         });
-        this.peer.on('connection', c => { 
-            this.connections.push(c); 
-            this.setup(c); 
-        });
+        this.peer.on('connection', c => { this.connections.push(c); this.setup(c); });
     },
 
     joinRoom() {
@@ -235,54 +246,39 @@ const online = {
     },
 
     setup(c) {
-        c.on('open', () => { 
-            if (!this.isHost) { 
-                c.send({ type: 'JOIN', name: this.myName }); 
-            } 
-        });
-
+        c.on('open', () => { if (!this.isHost) c.send({ type: 'JOIN', name: this.myName }); });
         c.on('data', data => {
             if (data.type === 'JOIN' && this.isHost) {
                 game.players.push(data.name);
                 this.broadcast({ type: 'LOBBY', list: game.players });
                 ui.updateLobby();
             }
-            if (data.type === 'LOBBY') { 
-                game.players = data.list; 
-                ui.updateLobby(); 
-            }
-            if (data.type === 'START') { 
-                game.mode = 'online'; 
-                game.init(); 
-            }
+            if (data.type === 'LOBBY') { game.players = data.list; ui.updateLobby(); }
+            if (data.type === 'START') { game.mode = 'online'; game.init(); }
             if (data.type === 'MOVE') {
-                // Host relays moves to all guests
                 if (this.isHost) this.broadcast(data); 
                 game.processMove(data.user, data.move);
+            }
+            if (data.type === 'ELIMINATE') {
+                if (this.isHost) this.broadcast(data);
+                game.processElimination(data.user);
             }
         });
     },
 
-    broadcast(d) { 
-        this.connections.forEach(c => {
-            if (c.open) c.send(d);
-        }); 
-    },
+    broadcast(d) { this.connections.forEach(c => { if (c.open) c.send(d); }); },
 
     sendData(d) { 
         if (this.isHost) {
             this.broadcast(d); 
-            game.processMove(d.user, d.move); 
+            if (d.type === 'MOVE') game.processMove(d.user, d.move);
+            if (d.type === 'ELIMINATE') game.processElimination(d.user);
         } else if (this.activeConn) {
             this.activeConn.send(d); 
         } 
     },
 
-    broadcastStart() { 
-        this.broadcast({ type: 'START' }); 
-        game.mode = 'online'; 
-        game.init(); 
-    }
+    broadcastStart() { this.broadcast({ type: 'START' }); game.mode = 'online'; game.init(); }
 };
 
 // --- UI HELPERS ---
@@ -290,17 +286,6 @@ const ui = {
     showScreen(id) {
         document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
         document.getElementById(id).classList.add('active');
-    },
-    addLocalPlayerField() {
-        const num = document.querySelectorAll('.local-p-name').length + 1;
-        const wrap = document.createElement('div');
-        wrap.className = 'player-field-wrap';
-        wrap.setAttribute('data-num', 'P' + num);
-        const input = document.createElement('input');
-        input.type = 'text'; input.className = 'field-input local-p-name';
-        input.placeholder = 'Player ' + num + ' Name';
-        wrap.appendChild(input);
-        document.getElementById('local-player-list').appendChild(wrap);
     },
     addLog(user, msg, type = "player") {
         const feed = document.getElementById('game-feed');
@@ -311,56 +296,38 @@ const ui = {
         feed.appendChild(div);
         feed.scrollTo({ top: feed.scrollHeight, behavior: 'smooth' });
     },
-    updateLobby() {
-        document.getElementById('lobby-list').innerText = "In Lobby: " + game.players.join(", ");
-    }
+    updateLobby() { document.getElementById('lobby-list').innerText = "In Lobby: " + game.players.join(", "); }
 };
 
-// --- INPUT & SEARCH OPTIMIZATION ---
+// --- INPUT & SEARCH ---
 const inputField = document.getElementById('user-input');
 const suggBox = document.getElementById('custom-suggestions');
 
 inputField.addEventListener('input', (e) => {
     const val = e.target.value.toLowerCase().trim();
     suggBox.innerHTML = '';
-    
-    if (val.length < 1) { 
-        suggBox.style.display = 'none'; 
-        return; 
-    }
-
+    if (val.length < 1) { suggBox.style.display = 'none'; return; }
     const cleanSearch = val.replace(/\s+/g, "");
     const matches = [];
-
     for (let i = 0; i < database.players.length; i++) {
         const p = database.players[i];
-        const cleanPlayer = p.name.toLowerCase().replace(/\s+/g, "");
-        if (cleanPlayer.includes(cleanSearch)) matches.push(p.name);
-        
+        if (p.name.toLowerCase().replace(/\s+/g, "").includes(cleanSearch)) matches.push(p.name);
         for (let j = 0; j < p.clubs.length; j++) {
-            const cleanClub = p.clubs[j].toLowerCase().replace(/\s+/g, "");
-            if (cleanClub.includes(cleanSearch)) matches.push(p.clubs[j]);
+            if (p.clubs[j].toLowerCase().replace(/\s+/g, "").includes(cleanSearch)) matches.push(p.clubs[j]);
         }
         if (matches.length >= 8) break; 
     }
-
     const uniqueMatches = [...new Set(matches)];
     if (uniqueMatches.length > 0) {
         uniqueMatches.forEach(match => {
             const div = document.createElement('div');
             div.className = 'dropdown-item';
             div.innerText = match;
-            div.onclick = () => { 
-                inputField.value = match; 
-                suggBox.style.display = 'none'; 
-                game.handleInput(); 
-            };
+            div.onclick = () => { inputField.value = match; suggBox.style.display = 'none'; game.handleInput(); };
             suggBox.appendChild(div);
         });
         suggBox.style.display = 'block';
-    } else { 
-        suggBox.style.display = 'none'; 
-    }
+    } else { suggBox.style.display = 'none'; }
 });
 
 document.addEventListener('keypress', (e) => {
