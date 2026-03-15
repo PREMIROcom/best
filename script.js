@@ -1,7 +1,6 @@
 // --- DATABASE INITIALIZATION ---
 let database = { players: [] };
 
-// Professional Fetch: Loads 20,000 players from your separate file
 async function loadDatabase() {
     try {
         const response = await fetch('players.json');
@@ -10,7 +9,6 @@ async function loadDatabase() {
         console.log("Success! Loaded " + database.players.length + " players.");
     } catch (err) {
         console.error("Database error:", err);
-        // Fallback for testing if file is missing
         database.players = [{ name: "Cristiano Ronaldo", clubs: ["Real Madrid", "Juventus", "Al Nassr"] }];
     }
 }
@@ -100,7 +98,6 @@ const game = {
         this.startTimer();
     },
 
-    // UPDATED: Now removes all spaces during comparison
     simplify: (s) => s.toLowerCase().replace(/\s+/g, "").replace(/[^a-z0-9]/g, ""),
 
     handleInput() {
@@ -126,8 +123,12 @@ const game = {
         }
 
         if (linked) {
-            if (this.mode === 'online') online.sendData({ type: 'MOVE', move: val, user: online.myName });
-            else this.processMove(this.players[this.turnIndex], val);
+            // CHANGED: If online, send to network. Otherwise process locally.
+            if (this.mode === 'online') {
+                online.sendData({ type: 'MOVE', move: val, user: online.myName });
+            } else {
+                this.processMove(this.players[this.turnIndex], val);
+            }
         } else {
             this.eliminate();
         }
@@ -187,7 +188,12 @@ const game = {
 
 // --- ONLINE / MULTIPLAYER LOGIC ---
 const online = {
-    peer: null, connections: [], myName: "", isHost: false,
+    peer: null, 
+    connections: [], 
+    activeConn: null, // Track guest's link to host
+    myName: "", 
+    isHost: false,
+
     createRoom() {
         this.myName = document.getElementById('player-nickname').value || "Host";
         const code = Math.floor(1000 + Math.random() * 9000).toString();
@@ -199,30 +205,76 @@ const online = {
             document.getElementById('start-online-btn').style.display = "block";
             ui.updateLobby();
         });
-        this.peer.on('connection', c => { this.connections.push(c); this.setup(c); });
+        this.peer.on('connection', c => { 
+            this.connections.push(c); 
+            this.setup(c); 
+        });
     },
+
     joinRoom() {
         const code = document.getElementById('join-id').value;
         this.myName = document.getElementById('player-nickname').value || "Guest";
         this.peer = new Peer();
-        this.peer.on('open', () => { this.setup(this.peer.connect(code)); });
+        this.peer.on('open', () => { 
+            const c = this.peer.connect(code);
+            this.activeConn = c; // Store connection
+            this.setup(c); 
+        });
     },
+
     setup(c) {
-        c.on('open', () => { if (!this.isHost) { this.activeConn = c; c.send({ type: 'JOIN', name: this.myName }); } });
+        c.on('open', () => { 
+            if (!this.isHost) { 
+                c.send({ type: 'JOIN', name: this.myName }); 
+            } 
+        });
+
         c.on('data', data => {
+            // Host receives join request
             if (data.type === 'JOIN' && this.isHost) {
                 game.players.push(data.name);
                 this.broadcast({ type: 'LOBBY', list: game.players });
                 ui.updateLobby();
             }
-            if (data.type === 'LOBBY') { game.players = data.list; ui.updateLobby(); }
-            if (data.type === 'START') { game.mode = 'online'; game.init(); }
-            if (data.type === 'MOVE') game.processMove(data.user, data.move);
+            // Guest receives updated lobby list
+            if (data.type === 'LOBBY') { 
+                game.players = data.list; 
+                ui.updateLobby(); 
+            }
+            // Guest receives game start signal
+            if (data.type === 'START') { 
+                game.mode = 'online'; 
+                game.init(); 
+            }
+            // CHANGED: If a move is received, process it. Host must also relay it.
+            if (data.type === 'MOVE') {
+                if (this.isHost) this.broadcast(data); 
+                game.processMove(data.user, data.move);
+            }
         });
     },
-    broadcast(d) { this.connections.forEach(c => c.send(d)); },
-    sendData(d) { if (this.isHost) this.broadcast(d); else this.activeConn.send(d); },
-    broadcastStart() { this.broadcast({ type: 'START' }); game.mode = 'online'; game.init(); }
+
+    broadcast(d) { 
+        this.connections.forEach(c => {
+            if (c.open) c.send(d);
+        }); 
+    },
+
+    // CHANGED: Logic to send data depending on if you are host or guest
+    sendData(d) { 
+        if (this.isHost) {
+            this.broadcast(d); 
+            game.processMove(d.user, d.move); // Local update for host
+        } else if (this.activeConn) {
+            this.activeConn.send(d); 
+        } 
+    },
+
+    broadcastStart() { 
+        this.broadcast({ type: 'START' }); 
+        game.mode = 'online'; 
+        game.init(); 
+    }
 };
 
 // --- UI HELPERS ---
@@ -264,25 +316,20 @@ inputField.addEventListener('input', (e) => {
     const val = e.target.value.toLowerCase().trim();
     suggBox.innerHTML = '';
     
-    // UPDATED: Now starts searching on the first character
     if (val.length < 1) { 
         suggBox.style.display = 'none'; 
         return; 
     }
 
-    // UPDATED: Clean spaces from typing
     const cleanSearch = val.replace(/\s+/g, "");
-
     const matches = [];
+
     for (let i = 0; i < database.players.length; i++) {
         const p = database.players[i];
-        
-        // UPDATED: Clean spaces from database player names
         const cleanPlayer = p.name.toLowerCase().replace(/\s+/g, "");
         if (cleanPlayer.includes(cleanSearch)) matches.push(p.name);
         
         for (let j = 0; j < p.clubs.length; j++) {
-            // UPDATED: Clean spaces from database club names
             const cleanClub = p.clubs[j].toLowerCase().replace(/\s+/g, "");
             if (cleanClub.includes(cleanSearch)) matches.push(p.clubs[j]);
         }
