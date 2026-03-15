@@ -123,7 +123,6 @@ const game = {
         }
 
         if (linked) {
-            // CHANGED: If online, send to network. Otherwise process locally.
             if (this.mode === 'online') {
                 online.sendData({ type: 'MOVE', move: val, user: online.myName });
             } else {
@@ -151,20 +150,31 @@ const game = {
         
     aiThink() {
         const targetClean = this.simplify(this.target);
-        let choice = null;
-        const player = database.players.find(p => this.simplify(p.name) === targetClean);
-        if (player) choice = player.clubs.find(c => !this.used.includes(this.simplify(c)));
+        let choices = [];
 
-        if (!choice) {
-            const pP = database.players.find(p => 
-                p.clubs.some(c => this.simplify(c) === targetClean) && 
-                !this.used.includes(this.simplify(p.name))
-            );
-            if (pP) choice = pP.name;
+        // 1. Check if target is a player: find all their clubs
+        const player = database.players.find(p => this.simplify(p.name) === targetClean);
+        if (player) {
+            player.clubs.forEach(club => {
+                if (!this.used.includes(this.simplify(club))) choices.push(club);
+            });
         }
 
-        if (choice) this.submitMove(choice); 
-        else this.eliminate();
+        // 2. Check if target is a club: find all players in that club
+        database.players.forEach(p => {
+            const hasClub = p.clubs.some(c => this.simplify(c) === targetClean);
+            if (hasClub && !this.used.includes(this.simplify(p.name))) {
+                choices.push(p.name);
+            }
+        });
+
+        // 3. Random Choice
+        if (choices.length > 0) {
+            const randomPick = choices[Math.floor(Math.random() * choices.length)];
+            this.submitMove(randomPick); 
+        } else {
+            this.eliminate();
+        }
     },
 
     eliminate() {
@@ -190,7 +200,7 @@ const game = {
 const online = {
     peer: null, 
     connections: [], 
-    activeConn: null, // Track guest's link to host
+    activeConn: null, 
     myName: "", 
     isHost: false,
 
@@ -217,7 +227,7 @@ const online = {
         this.peer = new Peer();
         this.peer.on('open', () => { 
             const c = this.peer.connect(code);
-            this.activeConn = c; // Store connection
+            this.activeConn = c;
             this.setup(c); 
         });
     },
@@ -230,23 +240,19 @@ const online = {
         });
 
         c.on('data', data => {
-            // Host receives join request
             if (data.type === 'JOIN' && this.isHost) {
                 game.players.push(data.name);
                 this.broadcast({ type: 'LOBBY', list: game.players });
                 ui.updateLobby();
             }
-            // Guest receives updated lobby list
             if (data.type === 'LOBBY') { 
                 game.players = data.list; 
                 ui.updateLobby(); 
             }
-            // Guest receives game start signal
             if (data.type === 'START') { 
                 game.mode = 'online'; 
                 game.init(); 
             }
-            // CHANGED: If a move is received, process it. Host must also relay it.
             if (data.type === 'MOVE') {
                 if (this.isHost) this.broadcast(data); 
                 game.processMove(data.user, data.move);
@@ -260,11 +266,10 @@ const online = {
         }); 
     },
 
-    // CHANGED: Logic to send data depending on if you are host or guest
     sendData(d) { 
         if (this.isHost) {
             this.broadcast(d); 
-            game.processMove(d.user, d.move); // Local update for host
+            game.processMove(d.user, d.move);
         } else if (this.activeConn) {
             this.activeConn.send(d); 
         } 
