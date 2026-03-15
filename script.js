@@ -5,14 +5,15 @@ async function loadDatabase() {
     try {
         const response = await fetch('players.json');
         if (!response.ok) throw new Error("Could not find players.json");
-        database.players = await response.json();
-        console.log("Success! Database loaded: " + database.players.length);
+        const data = await response.json();
+        database.players = data;
+        console.log("Database Loaded: " + database.players.length + " entries.");
     } catch (err) {
         console.error("Database error:", err);
+        // Fallback for testing
         database.players = [{ name: "Cristiano Ronaldo", clubs: ["Real Madrid", "Juventus", "Al Nassr"] }];
     }
 }
-
 loadDatabase();
 
 const game = {
@@ -34,30 +35,32 @@ const game = {
         const tEl = document.getElementById('timer');
         const bEl = document.getElementById('timer-bar');
         const inputField = document.getElementById('user-input');
+        const inputArea = document.querySelector('.input-section');
 
         if (nEl) nEl.innerText = name.toUpperCase();
         if (tEl) tEl.textContent = `0:${t.toString().padStart(2, '0')}`;
         
-        // TURN LOCKING & SPECTATOR VISUALS
+        // TURN & SPECTATOR LOCKING
         if (this.mode === 'online') {
             const isMyTurn = (name === online.myName);
             if (!isMyTurn || this.isEliminated) {
                 inputField.disabled = true;
-                inputField.placeholder = this.isEliminated ? "SPECTATING..." : "WAITING FOR TURN...";
-                document.querySelector('.input-section').style.opacity = "0.5";
-                document.querySelector('.input-section').style.pointerEvents = "none";
+                if (inputArea) {
+                    inputArea.style.opacity = "0.5";
+                    inputArea.style.pointerEvents = "none";
+                }
             } else {
                 inputField.disabled = false;
-                inputField.placeholder = "YOUR TURN! Type player/club...";
-                document.querySelector('.input-section').style.opacity = "1";
-                document.querySelector('.input-section').style.pointerEvents = "all";
+                if (inputArea) {
+                    inputArea.style.opacity = "1";
+                    inputArea.style.pointerEvents = "all";
+                }
             }
         }
 
         if (bEl) {
             bEl.style.width = pct + "%";
-            if (t <= 6) bEl.classList.add('urgent');
-            else bEl.classList.remove('urgent');
+            t <= 6 ? bEl.classList.add('urgent') : bEl.classList.remove('urgent');
         }
     },
 
@@ -65,15 +68,13 @@ const game = {
         if (this.timer) clearInterval(this.timer);
         this.timeLeft = 20;
         this.updateUI();
-
         this.timer = setInterval(() => {
             this.timeLeft--;
             this.updateUI();
-
             if (this.timeLeft <= 0) {
                 clearInterval(this.timer);
-                // MASTER RULE: Only the host or the current player actually triggers the elimination
-                if (this.mode !== 'online' || online.myName === this.players[this.turnIndex]) {
+                // Rule: Only host or current player triggers the out signal
+                if (this.mode !== 'online' || online.isHost || online.myName === this.players[this.turnIndex]) {
                     this.eliminate();
                 }
             }
@@ -100,7 +101,6 @@ const game = {
     },
 
     submitMove(val) {
-        // TURN LOCK
         if (this.mode === 'online' && this.players[this.turnIndex] !== online.myName) return;
         if (this.isEliminated) return;
 
@@ -109,9 +109,10 @@ const game = {
         
         let linked = false;
         const targetClean = this.simplify(this.target);
+        
+        // Check database
         const tP = database.players.find(p => this.simplify(p.name) === targetClean);
         if (tP && tP.clubs.some(c => this.simplify(c) === cleanVal)) linked = true;
-        
         if (!linked) {
             const iP = database.players.find(p => this.simplify(p.name) === cleanVal);
             if (iP && iP.clubs.some(c => this.simplify(c) === targetClean)) linked = true;
@@ -137,7 +138,6 @@ const game = {
         if (this.mode === 'ai' && this.players[this.turnIndex] === "AI Bot") setTimeout(() => this.aiThink(), 1200);
     },
 
-    // AI FIX: Pick randomly from the entire pool
     aiThink() {
         const targetClean = this.simplify(this.target);
         let pool = [];
@@ -152,10 +152,8 @@ const game = {
                 if (!this.used.includes(this.simplify(p.name))) pool.push(p.name);
             }
         });
-
         if (pool.length > 0) {
-            const randomPick = pool[Math.floor(Math.random() * pool.length)];
-            this.submitMove(randomPick); 
+            this.submitMove(pool[Math.floor(Math.random() * pool.length)]); 
         } else {
             this.eliminate();
         }
@@ -177,16 +175,16 @@ const game = {
     },
 
     processElimination(user) {
-        ui.addLog(user, "IS OUT! 🟥", "eliminated");
+        ui.addLog(user, "OUT! 🟥", "eliminated");
         
-        // SPECTATOR RULE
+        // Spectator mode: If it's you, stay in the room but stop playing
         if (this.mode === 'online' && user === online.myName) {
             this.isEliminated = true;
         }
 
         this.players.splice(this.players.indexOf(user), 1);
 
-        // WINNER SYNC
+        // Check if game is over
         if (this.players.length <= 1) {
             const winner = this.players[0] || "Nobody";
             if (this.mode === 'online' && online.isHost) {
@@ -207,7 +205,7 @@ const game = {
     }
 };
 
-// --- ONLINE MASTER LOGIC ---
+// --- ONLINE MANAGER ---
 const online = {
     peer: null, connections: [], activeConn: null, myName: "", isHost: false,
 
@@ -219,7 +217,8 @@ const online = {
         game.players = [this.myName];
         this.peer.on('open', id => {
             document.getElementById('room-code-display').innerText = id;
-            document.getElementById('start-online-btn').style.display = "block";
+            const startBtn = document.getElementById('start-online-btn');
+            if (startBtn) startBtn.style.display = "block";
             ui.updateLobby();
         });
         this.peer.on('connection', c => { this.connections.push(c); this.setup(c); });
@@ -246,17 +245,15 @@ const online = {
             }
             if (data.type === 'LOBBY') { game.players = data.list; ui.updateLobby(); }
             if (data.type === 'START') { game.mode = 'online'; game.init(); }
-            if (data.type === 'MOVE') {
+            if (data.type === 'MOVE') { 
                 if (this.isHost) this.broadcast(data); 
-                game.processMove(data.user, data.move);
+                game.processMove(data.user, data.move); 
             }
-            if (data.type === 'ELIMINATE') {
-                if (this.isHost) this.broadcast(data);
-                game.processElimination(data.user);
+            if (data.type === 'ELIMINATE') { 
+                if (this.isHost) this.broadcast(data); 
+                game.processElimination(data.user); 
             }
-            if (data.type === 'WIN') {
-                game.win(data.winner);
-            }
+            if (data.type === 'WIN') { game.win(data.winner); }
         });
     },
 
@@ -274,6 +271,7 @@ const online = {
     },
 
     broadcastStart() { 
+        if (!this.isHost) return;
         this.broadcast({ type: 'START' }); 
         game.mode = 'online'; 
         game.init(); 
@@ -288,53 +286,81 @@ const ui = {
     },
     addLog(user, msg, type = "player") {
         const feed = document.getElementById('game-feed');
+        if (!feed) return;
         const div = document.createElement('div');
         div.className = 'log-entry ' + type;
         const color = type==='ai'?'#4cc9f0':type==='system'?'#2ecc71':type==='eliminated'?'#e63946':'#e8f5ee';
-        div.innerHTML = `<span class="log-user" style="color:${color}">${user}</span><span class="log-msg">${msg}</span>`;
+        div.innerHTML = `<span class="log-user" style="color:${color}">${user}</span>: ${msg}`;
         feed.appendChild(div);
-        feed.scrollTo({ top: feed.scrollHeight, behavior: 'smooth' });
+        feed.scrollTo({ top: feed.scrollHeight });
     },
-    updateLobby() { document.getElementById('lobby-list').innerText = "In Lobby: " + game.players.join(", "); }
+    updateLobby() { 
+        const lb = document.getElementById('lobby-list');
+        if (lb) lb.innerText = "Players: " + game.players.join(", "); 
+    }
 };
 
-// --- SEARCH ENGINE ---
+// --- SEARCH & INPUT LOGIC ---
 const inputField = document.getElementById('user-input');
 const suggBox = document.getElementById('custom-suggestions');
 
-inputField.addEventListener('input', (e) => {
-    const val = e.target.value.toLowerCase().trim();
-    suggBox.innerHTML = '';
-    if (val.length < 1) { suggBox.style.display = 'none'; return; }
-    const cleanSearch = val.replace(/\s+/g, "");
-    const matches = [];
-    for (let i = 0; i < database.players.length; i++) {
-        const p = database.players[i];
-        if (p.name.toLowerCase().replace(/\s+/g, "").includes(cleanSearch)) matches.push(p.name);
-        for (let j = 0; j < p.clubs.length; j++) {
-            if (p.clubs[j].toLowerCase().replace(/\s+/g, "").includes(cleanSearch)) matches.push(p.clubs[j]);
+if (inputField) {
+    inputField.addEventListener('input', (e) => {
+        const val = e.target.value.toLowerCase().trim();
+        if (!suggBox) return;
+        suggBox.innerHTML = '';
+        if (val.length < 1) { suggBox.style.display = 'none'; return; }
+        
+        const cleanSearch = val.replace(/\s+/g, "");
+        const matches = [];
+        for (let i = 0; i < database.players.length; i++) {
+            const p = database.players[i];
+            if (p.name.toLowerCase().replace(/\s+/g, "").includes(cleanSearch)) matches.push(p.name);
+            for (let j = 0; j < p.clubs.length; j++) {
+                if (p.clubs[j].toLowerCase().replace(/\s+/g, "").includes(cleanSearch)) matches.push(p.clubs[j]);
+            }
+            if (matches.length >= 8) break; 
         }
-        if (matches.length >= 8) break; 
-    }
-    const uniqueMatches = [...new Set(matches)];
-    if (uniqueMatches.length > 0) {
-        uniqueMatches.forEach(match => {
-            const div = document.createElement('div');
-            div.className = 'dropdown-item';
-            div.innerText = match;
-            div.onclick = () => { 
-                inputField.value = match; 
-                suggBox.style.display = 'none'; 
-                game.handleInput(); 
-            };
-            suggBox.appendChild(div);
-        });
-        suggBox.style.display = 'block';
-    } else { suggBox.style.display = 'none'; }
+        
+        const uniqueMatches = [...new Set(matches)];
+        if (uniqueMatches.length > 0) {
+            uniqueMatches.forEach(match => {
+                const div = document.createElement('div');
+                div.className = 'dropdown-item';
+                div.innerText = match;
+                div.onclick = () => { 
+                    inputField.value = match; 
+                    suggBox.style.display = 'none'; 
+                    game.handleInput(); 
+                };
+                suggBox.appendChild(div);
+            });
+            suggBox.style.display = 'block';
+        } else { suggBox.style.display = 'none'; }
+    });
+
+    inputField.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') game.handleInput();
+    });
+}
+
+// --- BUTTON ATTACHMENTS ---
+document.getElementById('create-room-btn')?.addEventListener('click', () => online.createRoom());
+document.getElementById('join-room-btn')?.addEventListener('click', () => online.joinRoom());
+document.getElementById('start-online-btn')?.addEventListener('click', () => online.broadcastStart());
+
+// For Local/AI modes
+document.getElementById('start-ai-btn')?.addEventListener('click', () => {
+    const nick = document.getElementById('player-nickname').value || "You";
+    game.players = [nick, "AI Bot"];
+    game.mode = 'ai';
+    game.init();
 });
 
-document.addEventListener('keypress', (e) => {
-    if (e.key === 'Enter' && document.getElementById('screen-game').classList.contains('active')) {
-        game.handleInput();
-    }
+document.getElementById('start-local-btn')?.addEventListener('click', () => {
+    const inputs = document.querySelectorAll('.local-p-name');
+    game.players = Array.from(inputs).map(i => i.value.trim()).filter(v => v !== "");
+    if (game.players.length < 2) return alert("Enter at least 2 names!");
+    game.mode = 'local';
+    game.init();
 });
