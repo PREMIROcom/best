@@ -150,28 +150,30 @@ const game = {
         
     aiThink() {
         const targetClean = this.simplify(this.target);
-        let choices = [];
+        const possibleChoices = [];
 
-        // 1. Check if target is a player: find all their clubs
-        const player = database.players.find(p => this.simplify(p.name) === targetClean);
-        if (player) {
-            player.clubs.forEach(club => {
-                if (!this.used.includes(this.simplify(club))) choices.push(club);
-            });
-        }
-
-        // 2. Check if target is a club: find all players in that club
+        // 1. Gather ALL players who played for the target club
         database.players.forEach(p => {
             const hasClub = p.clubs.some(c => this.simplify(c) === targetClean);
             if (hasClub && !this.used.includes(this.simplify(p.name))) {
-                choices.push(p.name);
+                possibleChoices.push(p.name);
             }
         });
 
-        // 3. Random Choice
-        if (choices.length > 0) {
-            const randomPick = choices[Math.floor(Math.random() * choices.length)];
-            this.submitMove(randomPick); 
+        // 2. Gather ALL clubs the target player played for
+        const pMatch = database.players.find(p => this.simplify(p.name) === targetClean);
+        if (pMatch) {
+            pMatch.clubs.forEach(club => {
+                if (!this.used.includes(this.simplify(club))) {
+                    possibleChoices.push(club);
+                }
+            });
+        }
+
+        // 3. Pick a random answer from the pool
+        if (possibleChoices.length > 0) {
+            const randomIdx = Math.floor(Math.random() * possibleChoices.length);
+            this.submitMove(possibleChoices[randomIdx]); 
         } else {
             this.eliminate();
         }
@@ -227,7 +229,7 @@ const online = {
         this.peer = new Peer();
         this.peer.on('open', () => { 
             const c = this.peer.connect(code);
-            this.activeConn = c;
+            this.activeConn = c; 
             this.setup(c); 
         });
     },
@@ -269,7 +271,7 @@ const online = {
     sendData(d) { 
         if (this.isHost) {
             this.broadcast(d); 
-            game.processMove(d.user, d.move);
+            game.processMove(d.user, d.move); 
         } else if (this.activeConn) {
             this.activeConn.send(d); 
         } 
