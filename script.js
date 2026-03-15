@@ -38,7 +38,6 @@ const game = {
         if (nEl) nEl.innerText = name.toUpperCase();
         if (tEl) tEl.textContent = `0:${t.toString().padStart(2, '0')}`;
         
-        // FIX: Turn Lock & Spectator UI Logic
         if (this.mode === 'online') {
             const isMyTurn = (name === online.myName);
             if (!isMyTurn || this.isEliminated) {
@@ -108,7 +107,6 @@ const game = {
     },
 
     submitMove(val) {
-        // FIX: Prevent moves if it's not your turn or you are out
         if (this.mode === 'online' && this.players[this.turnIndex] !== online.myName) return;
         if (this.isEliminated) return;
 
@@ -147,27 +145,22 @@ const game = {
 
     aiThink() {
         const targetClean = this.simplify(this.target);
-        let possibleChoices = [];
-        
-        // 1. Check all clubs for target player
+        let pool = [];
         const playerMatch = database.players.find(p => this.simplify(p.name) === targetClean);
         if (playerMatch) {
             playerMatch.clubs.forEach(club => {
-                if (!this.used.includes(this.simplify(club))) possibleChoices.push(club);
+                if (!this.used.includes(this.simplify(club))) pool.push(club);
             });
         }
-        
-        // 2. Check all players for target club
         database.players.forEach(p => {
             if (p.clubs.some(c => this.simplify(c) === targetClean)) {
-                if (!this.used.includes(this.simplify(p.name))) possibleChoices.push(p.name);
+                if (!this.used.includes(this.simplify(p.name))) pool.push(p.name);
             }
         });
 
-        // FIX: Pick a random option from the pool
-        if (possibleChoices.length > 0) {
-            const randomIdx = Math.floor(Math.random() * possibleChoices.length);
-            this.submitMove(possibleChoices[randomIdx]); 
+        if (pool.length > 0) {
+            const randomIdx = Math.floor(Math.random() * pool.length);
+            this.submitMove(pool[randomIdx]); 
         } else {
             this.eliminate();
         }
@@ -191,17 +184,24 @@ const game = {
     processElimination(user) {
         ui.addLog(user, "Eliminated! 🟥", "eliminated");
         
-        // FIX: Spectator status check
         if (this.mode === 'online' && user === online.myName) {
             this.isEliminated = true;
-            alert("You are out! You can now spectate.");
         }
 
         this.players.splice(this.players.indexOf(user), 1);
 
-        // FIX: Final win check (if 1 player remains, game over)
         if (this.players.length <= 1) {
-            this.win(this.players[0] || "Nobody");
+            const winner = this.players[0] || "Nobody";
+            // FIX: If online, we broadcast the WIN signal to trigger animation for everyone
+            if (this.mode === 'online' && !this.isHost) {
+                 // Guest doesn't broadcast, host does. 
+                 // If the guest knows someone won, they just show it locally.
+                 this.win(winner);
+            } else if (this.mode === 'online' && this.isHost) {
+                online.sendData({ type: 'WIN', winner: winner });
+            } else {
+                this.win(winner);
+            }
         } else {
             if (this.turnIndex >= this.players.length) this.turnIndex = 0;
             this.startTimer();
@@ -263,6 +263,10 @@ const online = {
                 if (this.isHost) this.broadcast(data);
                 game.processElimination(data.user);
             }
+            // FIX: Handle the incoming WIN signal from host
+            if (data.type === 'WIN') {
+                game.win(data.winner);
+            }
         });
     },
 
@@ -273,6 +277,7 @@ const online = {
             this.broadcast(d); 
             if (d.type === 'MOVE') game.processMove(d.user, d.move);
             if (d.type === 'ELIMINATE') game.processElimination(d.user);
+            if (d.type === 'WIN') game.win(d.winner);
         } else if (this.activeConn) {
             this.activeConn.send(d); 
         } 
