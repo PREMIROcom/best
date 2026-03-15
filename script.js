@@ -6,7 +6,7 @@ async function loadDatabase() {
         const response = await fetch('players.json');
         if (!response.ok) throw new Error("Could not find players.json");
         database.players = await response.json();
-        console.log("Success! Loaded " + database.players.length + " players.");
+        console.log("Success! Database loaded: " + database.players.length);
     } catch (err) {
         console.error("Database error:", err);
         database.players = [{ name: "Cristiano Ronaldo", clubs: ["Real Madrid", "Juventus", "Al Nassr"] }];
@@ -33,19 +33,24 @@ const game = {
         const nEl = document.querySelector('.turn-name');
         const tEl = document.getElementById('timer');
         const bEl = document.getElementById('timer-bar');
-        const inputArea = document.querySelector('.input-section');
+        const inputField = document.getElementById('user-input');
 
         if (nEl) nEl.innerText = name.toUpperCase();
         if (tEl) tEl.textContent = `0:${t.toString().padStart(2, '0')}`;
         
+        // TURN LOCKING & SPECTATOR VISUALS
         if (this.mode === 'online') {
             const isMyTurn = (name === online.myName);
             if (!isMyTurn || this.isEliminated) {
-                inputArea.style.opacity = "0.5";
-                inputArea.style.pointerEvents = "none";
+                inputField.disabled = true;
+                inputField.placeholder = this.isEliminated ? "SPECTATING..." : "WAITING FOR TURN...";
+                document.querySelector('.input-section').style.opacity = "0.5";
+                document.querySelector('.input-section').style.pointerEvents = "none";
             } else {
-                inputArea.style.opacity = "1";
-                inputArea.style.pointerEvents = "all";
+                inputField.disabled = false;
+                inputField.placeholder = "YOUR TURN! Type player/club...";
+                document.querySelector('.input-section').style.opacity = "1";
+                document.querySelector('.input-section').style.pointerEvents = "all";
             }
         }
 
@@ -60,31 +65,19 @@ const game = {
         if (this.timer) clearInterval(this.timer);
         this.timeLeft = 20;
         this.updateUI();
+
         this.timer = setInterval(() => {
             this.timeLeft--;
             this.updateUI();
+
             if (this.timeLeft <= 0) {
                 clearInterval(this.timer);
+                // MASTER RULE: Only the host or the current player actually triggers the elimination
                 if (this.mode !== 'online' || online.myName === this.players[this.turnIndex]) {
                     this.eliminate();
                 }
             }
         }, 1000);
-    },
-
-    startLocal() {
-        const inputs = document.querySelectorAll('.local-p-name');
-        this.players = Array.from(inputs).map(i => i.value.trim()).filter(v => v !== "");
-        if (this.players.length < 2) return alert("Please enter at least 2 player names!");
-        this.mode = 'local';
-        this.init();
-    },
-
-    startAI() {
-        const n = document.getElementById('player-nickname').value || "You";
-        this.players = [n, "AI Bot"];
-        this.mode = 'ai';
-        this.init();
     },
 
     init() {
@@ -107,6 +100,7 @@ const game = {
     },
 
     submitMove(val) {
+        // TURN LOCK
         if (this.mode === 'online' && this.players[this.turnIndex] !== online.myName) return;
         if (this.isEliminated) return;
 
@@ -143,6 +137,7 @@ const game = {
         if (this.mode === 'ai' && this.players[this.turnIndex] === "AI Bot") setTimeout(() => this.aiThink(), 1200);
     },
 
+    // AI FIX: Pick randomly from the entire pool
     aiThink() {
         const targetClean = this.simplify(this.target);
         let pool = [];
@@ -159,8 +154,8 @@ const game = {
         });
 
         if (pool.length > 0) {
-            const randomIdx = Math.floor(Math.random() * pool.length);
-            this.submitMove(pool[randomIdx]); 
+            const randomPick = pool[Math.floor(Math.random() * pool.length)];
+            this.submitMove(randomPick); 
         } else {
             this.eliminate();
         }
@@ -173,39 +168,35 @@ const game = {
     },
 
     eliminate() {
-        const playerOut = this.players[this.turnIndex];
+        const loser = this.players[this.turnIndex];
         if (this.mode === 'online') {
-            online.sendData({ type: 'ELIMINATE', user: playerOut });
+            online.sendData({ type: 'ELIMINATE', user: loser });
         } else {
-            this.processElimination(playerOut);
+            this.processElimination(loser);
         }
     },
 
     processElimination(user) {
-        ui.addLog(user, "Eliminated! 🟥", "eliminated");
+        ui.addLog(user, "IS OUT! 🟥", "eliminated");
         
+        // SPECTATOR RULE
         if (this.mode === 'online' && user === online.myName) {
             this.isEliminated = true;
         }
 
         this.players.splice(this.players.indexOf(user), 1);
 
+        // WINNER SYNC
         if (this.players.length <= 1) {
             const winner = this.players[0] || "Nobody";
-            // FIX: If online, we broadcast the WIN signal to trigger animation for everyone
-            if (this.mode === 'online' && !this.isHost) {
-                 // Guest doesn't broadcast, host does. 
-                 // If the guest knows someone won, they just show it locally.
-                 this.win(winner);
-            } else if (this.mode === 'online' && this.isHost) {
+            if (this.mode === 'online' && online.isHost) {
                 online.sendData({ type: 'WIN', winner: winner });
-            } else {
+            } else if (this.mode !== 'online') {
                 this.win(winner);
             }
         } else {
             if (this.turnIndex >= this.players.length) this.turnIndex = 0;
             this.startTimer();
-            if (this.mode === 'ai' && this.players[this.turnIndex] === "AI Bot") setTimeout(() => this.aiThink(), 1000);
         }
     },
 
@@ -216,7 +207,7 @@ const game = {
     }
 };
 
-// --- ONLINE / MULTIPLAYER LOGIC ---
+// --- ONLINE MASTER LOGIC ---
 const online = {
     peer: null, connections: [], activeConn: null, myName: "", isHost: false,
 
@@ -263,7 +254,6 @@ const online = {
                 if (this.isHost) this.broadcast(data);
                 game.processElimination(data.user);
             }
-            // FIX: Handle the incoming WIN signal from host
             if (data.type === 'WIN') {
                 game.win(data.winner);
             }
@@ -283,7 +273,11 @@ const online = {
         } 
     },
 
-    broadcastStart() { this.broadcast({ type: 'START' }); game.mode = 'online'; game.init(); }
+    broadcastStart() { 
+        this.broadcast({ type: 'START' }); 
+        game.mode = 'online'; 
+        game.init(); 
+    }
 };
 
 // --- UI HELPERS ---
@@ -296,7 +290,7 @@ const ui = {
         const feed = document.getElementById('game-feed');
         const div = document.createElement('div');
         div.className = 'log-entry ' + type;
-        const color = type === 'ai' ? '#4cc9f0' : type === 'system' ? '#2ecc71' : type === 'eliminated' ? '#e63946' : '#e8f5ee';
+        const color = type==='ai'?'#4cc9f0':type==='system'?'#2ecc71':type==='eliminated'?'#e63946':'#e8f5ee';
         div.innerHTML = `<span class="log-user" style="color:${color}">${user}</span><span class="log-msg">${msg}</span>`;
         feed.appendChild(div);
         feed.scrollTo({ top: feed.scrollHeight, behavior: 'smooth' });
@@ -304,7 +298,7 @@ const ui = {
     updateLobby() { document.getElementById('lobby-list').innerText = "In Lobby: " + game.players.join(", "); }
 };
 
-// --- INPUT & SEARCH ---
+// --- SEARCH ENGINE ---
 const inputField = document.getElementById('user-input');
 const suggBox = document.getElementById('custom-suggestions');
 
@@ -328,7 +322,11 @@ inputField.addEventListener('input', (e) => {
             const div = document.createElement('div');
             div.className = 'dropdown-item';
             div.innerText = match;
-            div.onclick = () => { inputField.value = match; suggBox.style.display = 'none'; game.handleInput(); };
+            div.onclick = () => { 
+                inputField.value = match; 
+                suggBox.style.display = 'none'; 
+                game.handleInput(); 
+            };
             suggBox.appendChild(div);
         });
         suggBox.style.display = 'block';
