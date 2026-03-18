@@ -9,68 +9,73 @@ async function loadDatabase() {
         console.log("Success! Loaded " + database.players.length + " players.");
     } catch (err) {
         console.error("Database error:", err);
-        // Minimal fallback for safety
-        database.players = [{ name: "Cristiano Ronaldo", clubs: ["Real Madrid", "Juventus", "Al Nassr", "Manchester United"] }];
+        database.players = [{ name: "Cristiano Ronaldo", clubs: ["Real Madrid", "Juventus", "Al Nassr"] }];
     }
 }
 
 loadDatabase();
 
 const game = {
-    mode: 'local', 
-    target: "Cristiano Ronaldo", 
-    used: [], 
-    lockLimit: 12, // Increased for your 20k database
-    players: [],
-    turnIndex: 0, 
-    timer: null, 
+    mode: 'local',
+    target: "Cristiano Ronaldo",
+    used: [],
+    lockLimit: 5,
+    players: [],       // Active (still-in) players
+    spectators: [],    // Eliminated players watching
+    turnIndex: 0,
+    timer: null,
     timeLeft: 20,
 
-    // CORE: Determines if the CURRENT user can interact with the screen
-    canMove() {
-        if (this.players.length === 0) return false;
-        const activePlayerName = this.players[this.turnIndex];
-        
-        if (this.mode === 'local') return true;
-        if (this.mode === 'ai') return activePlayerName !== "AI Bot";
-        if (this.mode === 'online') return online.myName === activePlayerName;
-        return false;
+    // ─── TURN LOCKING ─────────────────────────────────────────────────────────
+    // Returns true if the current human (online: myName, local: turnIndex) can type
+    isMyTurn() {
+        if (this.mode === 'online') {
+            return this.players[this.turnIndex] === online.myName;
+        }
+        return true; // local / AI: always allow (AI is handled separately)
     },
 
+    lockInput(locked) {
+        const input = document.getElementById('user-input');
+        const submitBtn = document.querySelector('.submit-btn-row .btn:last-child');
+        const oneClubBtn = document.getElementById('one-club-btn');
+        if (input)      input.disabled      = locked;
+        if (submitBtn)  submitBtn.disabled  = locked;
+        if (oneClubBtn) oneClubBtn.disabled = locked;
+        if (input) {
+            input.placeholder = locked ? "Waiting for opponent…" : "Type a player or club…";
+            input.style.opacity = locked ? '0.45' : '1';
+        }
+    },
+
+    // ─── UI UPDATE ────────────────────────────────────────────────────────────
     updateUI() {
-        const name = this.players[this.turnIndex] || "MATCH OVER";
+        const name = this.players[this.turnIndex] || "?";
         const t = this.timeLeft;
         const pct = (t / 20) * 100;
-        
-        const nEl = document.getElementById('active-player-display');
+        const nEl = document.querySelector('.turn-name');
         const tEl = document.getElementById('timer');
         const bEl = document.getElementById('timer-bar');
-        const input = document.getElementById('user-input');
-        const actionBtns = document.querySelectorAll('.submit-btn-row .btn');
 
         if (nEl) nEl.innerText = name.toUpperCase();
         if (tEl) tEl.textContent = `0:${t.toString().padStart(2, '0')}`;
-        
         if (bEl) {
             bEl.style.width = pct + "%";
-            t <= 6 ? bEl.classList.add('urgent') : bEl.classList.remove('urgent');
+            if (t <= 6) bEl.classList.add('urgent');
+            else        bEl.classList.remove('urgent');
         }
 
-        // TURN LOCKING
-        const isMyTurn = this.canMove();
-        input.disabled = !isMyTurn;
-        
-        // Visual feedback for locked buttons
-        actionBtns.forEach(btn => {
-            btn.style.opacity = isMyTurn ? "1" : "0.3";
-            btn.style.pointerEvents = isMyTurn ? "auto" : "none";
-        });
-
-        if (this.players.length > 0) {
-            input.placeholder = isMyTurn ? "Your turn! Type..." : `Waiting for ${name}...`;
+        // Lock input when it's not this player's turn (online) or when AI is thinking
+        if (this.mode === 'online') {
+            this.lockInput(!this.isMyTurn());
+        } else if (this.mode === 'ai') {
+            this.lockInput(this.players[this.turnIndex] === "AI Bot");
+        } else {
+            this.lockInput(false);
         }
     },
 
+    // ─── TIMER ────────────────────────────────────────────────────────────────
     startTimer() {
         if (this.timer) clearInterval(this.timer);
         this.timeLeft = 20;
@@ -80,150 +85,50 @@ const game = {
             this.updateUI();
             if (this.timeLeft <= 0) {
                 clearInterval(this.timer);
-                // Host handles timing in online mode to ensure everyone is synced
+                const loser = this.players[this.turnIndex];
+                ui.addLog("SYSTEM", `${loser.toUpperCase()} was too slow! 🟥`, "eliminated");
+
+                // In online mode, only the host drives eliminations to avoid double-firing
+                if (this.mode === 'online' && !online.isHost) return;
                 if (this.mode === 'online') {
-                    if (online.isHost) this.eliminate();
-                } else {
-                    this.eliminate();
+                    online.broadcast({ type: 'ELIMINATE', player: loser });
                 }
+                this.eliminate();
             }
         }, 1000);
     },
 
-    simplify: (s) => s.toLowerCase().replace(/\s+/g, "").replace(/[^a-z0-9]/g, ""),
-
-    handleInput() {
-        const input = document.getElementById('user-input');
-        const val = input.value.trim();
-        if (!val || !this.canMove()) return;
-        this.submitMove(val);  
-        input.value = "";
-    },
-
-    submitMove(val) {
-        const cleanVal = this.simplify(val);
-        if (this.used.includes(cleanVal)) return alert("Already used in this chain!");
-        
-        let linked = false;
-        const targetClean = this.simplify(this.target);
-        
-        // 1. Check if input is a club for current target player
-        const tP = database.players.find(p => this.simplify(p.name) === targetClean);
-        if (tP && tP.clubs.some(c => this.simplify(c) === cleanVal)) linked = true;
-        
-        // 2. Check if input is a player for current target club
-        if (!linked) {
-            const iP = database.players.find(p => this.simplify(p.name) === cleanVal);
-            if (iP && iP.clubs.some(c => this.simplify(c) === targetClean)) linked = true;
-        }
-
-        if (linked) {
-            if (this.mode === 'online') {
-                online.sendMove(val);
-            } else {
-                this.processMove(this.players[this.turnIndex], val);
-            }
-        } else {
-            // Elimination logic
-            if (this.mode === 'online' && !online.isHost) {
-                online.activeConn.send({ type: 'FAILED_ATTEMPT', user: online.myName });
-            } else {
-                this.eliminate();
-            }
-        }
-    },
-
-    processMove(user, move) {
-        ui.addLog(user, move, user === "AI Bot" ? "ai" : "player");
-        this.target = move;
-        this.addToUsed(move);
-        this.turnIndex = (this.turnIndex + 1) % this.players.length;
-        this.startTimer();
-        
-        if (this.mode === 'ai' && this.players[this.turnIndex] === "AI Bot") {
-            setTimeout(() => this.aiThink(), 1200);
-        }
-    },
-
-    // NEW RANDOMIZED AI
-    aiThink() {
-        const targetClean = this.simplify(this.target);
-        const options = [];
-
-        for (const p of database.players) {
-            const pNameClean = this.simplify(p.name);
-            // If target is player, look for their clubs
-            if (pNameClean === targetClean) {
-                p.clubs.forEach(c => {
-                    if (!this.used.includes(this.simplify(c))) options.push(c);
-                });
-            }
-            // If target is club, look for players in that club
-            if (p.clubs.some(c => this.simplify(c) === targetClean)) {
-                if (!this.used.includes(pNameClean)) options.push(p.name);
-            }
-        }
-
-        if (options.length > 0) {
-            const randomPick = options[Math.floor(Math.random() * options.length)];
-            this.submitMove(randomPick);
-        } else {
-            this.eliminate();
-        }
-    },
-
+    // ─── ONE-CLUB PLAYER ──────────────────────────────────────────────────────
     handleOneClub() {
-        if (!this.canMove()) return;
+        if (!this.isMyTurn() && this.mode === 'online') return;
         const targetClean = this.simplify(this.target);
         const pMatch = database.players.find(p => this.simplify(p.name) === targetClean);
 
         if (pMatch && pMatch.clubs.length === 1) {
-            const move = pMatch.clubs[0];
-            if (this.mode === 'online') online.sendMove(move);
-            else this.processMove(this.players[this.turnIndex], move);
+            const onlyClub = pMatch.clubs[0];
+            if (this.mode === 'online') {
+                online.sendData({ type: 'MOVE', move: onlyClub, user: online.myName, oneClub: true });
+            } else {
+                ui.addLog(this.players[this.turnIndex], `LOYALTY! -> ${onlyClub.toUpperCase()}`, "system");
+                this.target = onlyClub;
+                this.addToUsed(onlyClub);
+                this.turnIndex = (this.turnIndex + 1) % this.players.length;
+                this.startTimer();
+                if (this.mode === 'ai' && this.players[this.turnIndex] === "AI Bot") {
+                    setTimeout(() => this.aiThink(), 1200);
+                }
+            }
         } else {
+            const loser = this.players[this.turnIndex];
+            ui.addLog("SYSTEM", `${loser.toUpperCase()} fake loyalty! 🟥`, "eliminated");
+            if (this.mode === 'online') {
+                online.broadcast({ type: 'ELIMINATE', player: loser });
+            }
             this.eliminate();
         }
     },
 
-    eliminate() {
-        const loser = this.players[this.turnIndex];
-        ui.addLog(loser, "RED CARD! 🟥", "eliminated");
-        
-        this.players.splice(this.turnIndex, 1);
-        
-        if (this.mode === 'online' && online.isHost) {
-            if (this.players.length <= 1) {
-                const winner = this.players[0] || "Nobody";
-                online.broadcast({ type: 'WIN', winner: winner });
-                this.win(winner);
-            } else {
-                if (this.turnIndex >= this.players.length) this.turnIndex = 0;
-                online.broadcast({ type: 'SYNC', players: this.players, turn: this.turnIndex, target: this.target });
-                this.startTimer();
-            }
-        } else if (this.mode !== 'online') {
-            if (this.players.length <= 1) {
-                this.win(this.players[0] || "Nobody");
-            } else {
-                if (this.turnIndex >= this.players.length) this.turnIndex = 0;
-                this.startTimer();
-                if (this.mode === 'ai' && this.players[this.turnIndex] === "AI Bot") setTimeout(() => this.aiThink(), 1000);
-            }
-        }
-    },
-
-    addToUsed(name) {
-        this.used.push(this.simplify(name));
-        if (this.used.length > this.lockLimit) this.used.shift(); 
-    },
-
-    win(name) {
-        clearInterval(this.timer);
-        document.getElementById('winner-name').innerText = name.toUpperCase() + " WINS!";
-        document.getElementById('victory-screen').style.display = 'flex';
-    },
-
+    // ─── START HELPERS ────────────────────────────────────────────────────────
     startLocal() {
         const inputs = document.querySelectorAll('.local-p-name');
         this.players = Array.from(inputs).map(i => i.value.trim()).filter(v => v !== "");
@@ -240,17 +145,152 @@ const game = {
     },
 
     init() {
+        this.spectators = [];
         this.used = [this.simplify(this.target)];
         ui.showScreen('screen-game');
-        ui.addLog("SYSTEM", "Match started! Target: " + this.target, "system");
+        ui.addLog("SYSTEM", "Chain starts with: " + this.target, "system");
         this.updateUI();
         this.startTimer();
+    },
+
+    simplify: (s) => s.toLowerCase().replace(/\s+/g, "").replace(/[^a-z0-9]/g, ""),
+
+    // ─── INPUT HANDLING ───────────────────────────────────────────────────────
+    handleInput() {
+        if (!this.isMyTurn() && this.mode === 'online') return;
+        const input = document.getElementById('user-input');
+        const val = input.value.trim();
+        if (!val) return;
+        this.submitMove(val);
+        input.value = "";
+    },
+
+    submitMove(val) {
+        const cleanVal = this.simplify(val);
+        if (this.used.includes(cleanVal)) return alert("Already used!");
+        let linked = false;
+        const targetClean = this.simplify(this.target);
+
+        const tP = database.players.find(p => this.simplify(p.name) === targetClean);
+        if (tP && tP.clubs.some(c => this.simplify(c) === cleanVal)) linked = true;
+
+        if (!linked) {
+            const iP = database.players.find(p => this.simplify(p.name) === cleanVal);
+            if (iP && iP.clubs.some(c => this.simplify(c) === targetClean)) linked = true;
+        }
+
+        if (linked) {
+            if (this.mode === 'online') {
+                online.sendData({ type: 'MOVE', move: val, user: online.myName });
+            } else {
+                this.processMove(this.players[this.turnIndex], val);
+            }
+        } else {
+            const loser = this.players[this.turnIndex];
+            ui.addLog("SYSTEM", `❌ Invalid link! ${loser.toUpperCase()} is eliminated! 🟥`, "eliminated");
+            if (this.mode === 'online') {
+                online.broadcast({ type: 'ELIMINATE', player: loser });
+            }
+            this.eliminate();
+        }
+    },
+
+    addToUsed(name) {
+        const cleanName = this.simplify(name);
+        this.used.push(cleanName);
+        if (this.used.length > this.lockLimit) this.used.shift();
+    },
+
+    processMove(user, move, isOneClub = false) {
+        const label = isOneClub ? `LOYALTY! -> ${move.toUpperCase()}` : move;
+        ui.addLog(user, label, user === "AI Bot" ? "ai" : "player");
+        this.target = move;
+        this.addToUsed(move);
+        this.turnIndex = (this.turnIndex + 1) % this.players.length;
+        this.startTimer();
+        if (this.mode === 'ai' && this.players[this.turnIndex] === "AI Bot") {
+            setTimeout(() => this.aiThink(), 1200);
+        }
+    },
+
+    // ─── RANDOMIZED AI ────────────────────────────────────────────────────────
+    // Collects ALL valid answers, shuffles them, and picks one at random
+    aiThink() {
+        const targetClean = this.simplify(this.target);
+        const candidates = [];
+
+        // Find the current target as a player → collect unused clubs
+        const asPlayer = database.players.find(p => this.simplify(p.name) === targetClean);
+        if (asPlayer) {
+            asPlayer.clubs
+                .filter(c => !this.used.includes(this.simplify(c)))
+                .forEach(c => candidates.push(c));
+        }
+
+        // Find the current target as a club → collect players who played there
+        database.players.forEach(p => {
+            if (
+                p.clubs.some(c => this.simplify(c) === targetClean) &&
+                !this.used.includes(this.simplify(p.name))
+            ) {
+                candidates.push(p.name);
+            }
+        });
+
+        if (candidates.length === 0) {
+            this.eliminate();
+            return;
+        }
+
+        // Shuffle and pick a random valid answer
+        const shuffled = candidates.sort(() => Math.random() - 0.5);
+        const choice = shuffled[0];
+        this.submitMove(choice);
+    },
+
+    // ─── ELIMINATION + SPECTATOR MODE ─────────────────────────────────────────
+    eliminate() {
+        if (this.timer) clearInterval(this.timer);
+        const loserName = this.players[this.turnIndex];
+
+        // Move eliminated player to spectators (Spectator Mode)
+        this.spectators.push(loserName);
+        this.players.splice(this.turnIndex, 1);
+
+        ui.updateSpectatorBar(this.spectators);
+
+        // ── Game Over Sync: 1 player left = everyone sees the win screen ──
+        if (this.players.length <= 1) {
+            const winner = this.players[0] || "Nobody";
+            if (this.mode === 'online') {
+                online.broadcast({ type: 'WIN', winner });
+            }
+            this.win(winner);
+            return;
+        }
+
+        if (this.turnIndex >= this.players.length) this.turnIndex = 0;
+        this.startTimer();
+        if (this.mode === 'ai' && this.players[this.turnIndex] === "AI Bot") {
+            setTimeout(() => this.aiThink(), 1000);
+        }
+    },
+
+    win(name) {
+        clearInterval(this.timer);
+        this.lockInput(true);
+        document.getElementById('winner-name').innerText = name.toUpperCase() + " WINS!";
+        document.getElementById('victory-screen').style.display = 'flex';
     }
 };
 
-// --- MULTIPLAYER (PEERJS) ---
+// --- ONLINE / MULTIPLAYER LOGIC ---
 const online = {
-    peer: null, connections: [], myName: "", isHost: false, activeConn: null,
+    peer: null,
+    connections: [],
+    myName: "",
+    isHost: false,
+    activeConn: null,
 
     createRoom() {
         this.myName = document.getElementById('player-nickname').value || "Host";
@@ -263,66 +303,78 @@ const online = {
             document.getElementById('start-online-btn').style.display = "block";
             ui.updateLobby();
         });
-        this.peer.on('connection', c => { 
-            this.connections.push(c); 
-            this.setup(c); 
-        });
+        this.peer.on('connection', c => { this.connections.push(c); this.setup(c); });
     },
 
     joinRoom() {
         const code = document.getElementById('join-id').value;
         this.myName = document.getElementById('player-nickname').value || "Guest";
         this.peer = new Peer();
-        this.peer.on('open', () => { 
-            this.setup(this.peer.connect(code)); 
-        });
+        this.peer.on('open', () => { this.setup(this.peer.connect(code)); });
     },
 
     setup(c) {
-        c.on('open', () => { 
-            if (!this.isHost) { 
-                this.activeConn = c; 
-                c.send({ type: 'JOIN', name: this.myName }); 
-            } 
+        c.on('open', () => {
+            if (!this.isHost) {
+                this.activeConn = c;
+                c.send({ type: 'JOIN', name: this.myName });
+            }
         });
+
         c.on('data', data => {
-            if (this.isHost) {
-                if (data.type === 'JOIN') {
-                    game.players.push(data.name);
-                    this.broadcast({ type: 'LOBBY', list: game.players });
-                    ui.updateLobby();
+            // ── Lobby ──
+            if (data.type === 'JOIN' && this.isHost) {
+                game.players.push(data.name);
+                this.broadcast({ type: 'LOBBY', list: game.players });
+                ui.updateLobby();
+            }
+            if (data.type === 'LOBBY') {
+                game.players = data.list;
+                ui.updateLobby();
+            }
+
+            // ── Game Start (Network Sync) ──
+            if (data.type === 'START') {
+                game.mode = 'online';
+                game.init();
+            }
+
+            // ── Move (Network Sync) ──
+            if (data.type === 'MOVE') {
+                // Host relays moves to everyone else
+                if (this.isHost) this.broadcast(data);
+                game.processMove(data.user, data.move, data.oneClub || false);
+            }
+
+            // ── Elimination (Network Sync) ──
+            if (data.type === 'ELIMINATE') {
+                // Host relays eliminations to everyone else
+                if (this.isHost) this.broadcast(data);
+                // Find and remove the named player on every client
+                const idx = game.players.indexOf(data.player);
+                if (idx !== -1) {
+                    game.spectators.push(data.player);
+                    game.players.splice(idx, 1);
+                    ui.addLog("SYSTEM", `${data.player.toUpperCase()} eliminated! 🟥`, "eliminated");
+                    ui.updateSpectatorBar(game.spectators);
+                    if (game.players.length <= 1) {
+                        game.win(game.players[0] || "Nobody");
+                    } else {
+                        if (game.turnIndex >= game.players.length) game.turnIndex = 0;
+                        game.startTimer();
+                    }
                 }
-                if (data.type === 'MOVE_TRY') {
-                    game.processMove(data.user, data.move);
-                    this.broadcast({ type: 'MOVE_SYNC', user: data.user, move: data.move });
-                }
-                if (data.type === 'FAILED_ATTEMPT') game.eliminate();
-            } else {
-                if (data.type === 'LOBBY') { game.players = data.list; ui.updateLobby(); }
-                if (data.type === 'START') { game.mode = 'online'; game.init(); }
-                if (data.type === 'MOVE_SYNC') game.processMove(data.user, data.move);
-                if (data.type === 'SYNC') {
-                    game.players = data.players;
-                    game.turnIndex = data.turn;
-                    game.target = data.target;
-                    game.startTimer();
-                }
-                if (data.type === 'WIN') game.win(data.winner);
+            }
+
+            // ── Win (Game Over Sync) ──
+            if (data.type === 'WIN') {
+                game.win(data.winner);
             }
         });
     },
 
-    broadcast(d) { this.connections.forEach(c => c.send(d)); },
-    
-    sendMove(val) {
-        if (this.isHost) {
-            game.processMove(this.myName, val);
-            this.broadcast({ type: 'MOVE_SYNC', user: this.myName, move: val });
-        } else {
-            this.activeConn.send({ type: 'MOVE_TRY', move: val, user: this.myName });
-        }
-    },
-
+    broadcast(d) { this.connections.forEach(c => { try { c.send(d); } catch(e) {} }); },
+    sendData(d)  { if (this.isHost) this.broadcast(d); else if (this.activeConn) this.activeConn.send(d); },
     broadcastStart() {
         this.broadcast({ type: 'START' });
         game.mode = 'online';
@@ -330,78 +382,120 @@ const online = {
     }
 };
 
-// --- UI AND EVENT LISTENERS ---
+// --- UI HELPERS ---
 const ui = {
     showScreen(id) {
         document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
-        const target = document.getElementById(id);
-        if (target) target.classList.add('active');
+        document.getElementById(id).classList.add('active');
     },
+
     addLocalPlayerField() {
         const num = document.querySelectorAll('.local-p-name').length + 1;
         const wrap = document.createElement('div');
         wrap.className = 'player-field-wrap';
         wrap.setAttribute('data-num', 'P' + num);
-        wrap.innerHTML = `<input type="text" class="field-input local-p-name" placeholder="Player ${num} Name">`;
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'field-input local-p-name';
+        input.placeholder = 'Player ' + num + ' Name';
+        wrap.appendChild(input);
         document.getElementById('local-player-list').appendChild(wrap);
     },
+
     addLog(user, msg, type = "player") {
         const feed = document.getElementById('game-feed');
-        if (!feed) return;
         const div = document.createElement('div');
         div.className = 'log-entry ' + type;
-        const color = type === 'ai' ? '#4cc9f0' : type === 'system' ? '#2ecc71' : type === 'eliminated' ? '#e63946' : '#e8f5ee';
+        const color = type === 'ai' ? '#4cc9f0'
+                    : type === 'system' ? '#2ecc71'
+                    : type === 'eliminated' ? '#e63946'
+                    : '#e8f5ee';
         div.innerHTML = `<span class="log-user" style="color:${color}">${user}</span><span class="log-msg">${msg}</span>`;
         feed.appendChild(div);
         feed.scrollTo({ top: feed.scrollHeight, behavior: 'smooth' });
     },
+
     updateLobby() {
-        const lb = document.getElementById('lobby-list');
-        if (lb) lb.innerText = "In Lobby: " + game.players.join(", ");
+        document.getElementById('lobby-list').innerText = "In Lobby: " + game.players.join(", ");
+    },
+
+    // ── Spectator Mode: shows a small strip of who's watching ──
+    updateSpectatorBar(spectators) {
+        let bar = document.getElementById('spectator-bar');
+        if (!spectators || spectators.length === 0) {
+            if (bar) bar.style.display = 'none';
+            return;
+        }
+        if (!bar) {
+            bar = document.createElement('div');
+            bar.id = 'spectator-bar';
+            bar.style.cssText = `
+                font-family: 'Barlow Condensed', sans-serif;
+                font-size: 0.72rem;
+                letter-spacing: 0.18em;
+                text-transform: uppercase;
+                color: #7aab8a;
+                background: rgba(230,57,70,0.08);
+                border: 1px solid rgba(230,57,70,0.2);
+                border-radius: 8px;
+                padding: 6px 12px;
+                margin-bottom: 8px;
+                text-align: center;
+            `;
+            const gameScreen = document.getElementById('screen-game');
+            const feed = document.getElementById('game-feed');
+            gameScreen.insertBefore(bar, feed);
+        }
+        bar.style.display = 'block';
+        bar.innerText = `👀 Spectating: ${spectators.join(", ")}`;
     }
 };
 
-// --- SUGGESTIONS & INPUT ---
+// --- INPUT & SEARCH OPTIMIZATION ---
 const inputField = document.getElementById('user-input');
-const suggBox = document.getElementById('custom-suggestions');
+const suggBox    = document.getElementById('custom-suggestions');
 
-if (inputField) {
-    inputField.addEventListener('input', (e) => {
-        const val = e.target.value.toLowerCase().trim();
-        suggBox.innerHTML = '';
-        if (val.length < 1) { suggBox.style.display = 'none'; return; }
+inputField.addEventListener('input', (e) => {
+    const val = e.target.value.toLowerCase().trim();
+    suggBox.innerHTML = '';
 
-        const cleanSearch = val.replace(/\s+/g, "");
-        const matches = [];
+    if (val.length < 1) { suggBox.style.display = 'none'; return; }
 
-        for (const p of database.players) {
-            if (p.name.toLowerCase().replace(/\s+/g, "").includes(cleanSearch)) matches.push(p.name);
-            for (const c of p.clubs) {
-                if (c.toLowerCase().replace(/\s+/g, "").includes(cleanSearch)) matches.push(c);
-            }
-            if (matches.length >= 10) break;
+    const cleanSearch = val.replace(/\s+/g, "");
+    const matches = [];
+
+    for (let i = 0; i < database.players.length; i++) {
+        const p = database.players[i];
+        const cleanPlayer = p.name.toLowerCase().replace(/\s+/g, "");
+        if (cleanPlayer.includes(cleanSearch)) matches.push(p.name);
+        for (let j = 0; j < p.clubs.length; j++) {
+            const cleanClub = p.clubs[j].toLowerCase().replace(/\s+/g, "");
+            if (cleanClub.includes(cleanSearch)) matches.push(p.clubs[j]);
         }
+        if (matches.length >= 8) break;
+    }
 
-        const uniqueMatches = [...new Set(matches)];
-        if (uniqueMatches.length > 0) {
-            uniqueMatches.forEach(match => {
-                const div = document.createElement('div');
-                div.className = 'dropdown-item';
-                div.innerText = match;
-                div.onclick = () => { 
-                    inputField.value = match; 
-                    suggBox.style.display = 'none'; 
-                    game.handleInput(); 
-                };
-                suggBox.appendChild(div);
-            });
-            suggBox.style.display = 'block';
-        } else { 
-            suggBox.style.display = 'none'; 
-        }
-    });
+    const uniqueMatches = [...new Set(matches)];
+    if (uniqueMatches.length > 0) {
+        uniqueMatches.forEach(match => {
+            const div = document.createElement('div');
+            div.className = 'dropdown-item';
+            div.innerText = match;
+            div.onclick = () => {
+                inputField.value = match;
+                suggBox.style.display = 'none';
+                game.handleInput();
+            };
+            suggBox.appendChild(div);
+        });
+        suggBox.style.display = 'block';
+    } else {
+        suggBox.style.display = 'none';
+    }
+});
 
-    inputField.addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') game.handleInput();
-    });
-}
+document.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter' && document.getElementById('screen-game').classList.contains('active')) {
+        game.handleInput();
+    }
+});
