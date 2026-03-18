@@ -223,6 +223,17 @@ const game = {
         if (this.used.length > this.lockLimit) this.used.shift();
     },
 
+    // applyConfirmedMove: single code path used by ALL clients (including host) for online moves
+    // The host stamps nextTurn so every screen uses the identical value — no drift possible.
+    applyConfirmedMove(data) {
+        const label = data.oneClub ? `LOYALTY! -> ${data.move.toUpperCase()}` : data.move;
+        ui.addLog(data.user, label, "player");
+        this.target = data.move;
+        this.addToUsed(data.move);
+        this.turnIndex = data.nextTurn;   // use host's canonical value, never self-compute
+        this.startTimer();
+    },
+
     processMove(user, move, isOneClub = false) {
         const label = isOneClub ? `LOYALTY! -> ${move.toUpperCase()}` : move;
         ui.addLog(user, label, user === "AI Bot" ? "ai" : "player");
@@ -361,48 +372,34 @@ const online = {
                 game.init();
             }
 
-            // ── Move: host validates, stamps canonical turnIndex, broadcasts to ALL ──
+            // ── Move: host confirms, broadcasts MOVE_CONFIRM to all peers, then applies locally ──
             if (data.type === 'MOVE') {
                 if (this.isHost) {
-                    // Compute next turnIndex here so it's the same for everyone
                     const nextTurn = (game.turnIndex + 1) % game.players.length;
-                    this.broadcast({
+                    const confirm = {
                         type: 'MOVE_CONFIRM',
                         move: data.move,
                         user: data.user,
                         oneClub: data.oneClub || false,
                         nextTurn
-                    });
-                    // Host also applies it to itself
-                    game.processMove(data.user, data.move, data.oneClub || false);
+                    };
+                    this.broadcast(confirm);          // send to all non-host peers
+                    game.applyConfirmedMove(confirm); // host applies to its own screen
                 }
             }
 
-            // ── MOVE_CONFIRM: all non-host clients apply the move ──
+            // ── MOVE_CONFIRM: non-host clients receive and apply ──
             if (data.type === 'MOVE_CONFIRM') {
-                // turnIndex comes from the host — overwrite local state so it never drifts
-                game.turnIndex = data.nextTurn - 1; // processMove will increment once more
-                if (game.turnIndex < 0) game.turnIndex = game.players.length - 1;
-                game.processMove(data.user, data.move, data.oneClub || false);
+                game.applyConfirmedMove(data);
             }
 
-            // ── Eliminate: host fans it out, everyone applies by player name ──
+            // ── Eliminate: host fans out to peers then applies; clients apply directly ──
             if (data.type === 'ELIMINATE') {
-                if (this.isHost) this.broadcast(data);
-                const idx = game.players.indexOf(data.player);
-                if (idx !== -1) {
-                    game.spectators.push(data.player);
-                    game.players.splice(idx, 1);
-                    ui.addLog("SYSTEM", `${data.player.toUpperCase()} eliminated! 🟥`, "eliminated");
-                    ui.updateSpectatorBar(game.spectators);
-                    if (game.players.length <= 1) {
-                        const winner = game.players[0] || "Nobody";
-                        if (this.isHost) this.broadcast({ type: 'WIN', winner });
-                        game.win(winner);
-                    } else {
-                        if (game.turnIndex >= game.players.length) game.turnIndex = 0;
-                        game.startTimer();
-                    }
+                if (this.isHost) {
+                    this.broadcast(data);
+                    this._applyEliminate(data);
+                } else {
+                    this._applyEliminate(data);
                 }
             }
 
@@ -414,7 +411,51 @@ const online = {
     },
 
     broadcast(d) { this.connections.forEach(c => { try { c.send(d); } catch(e) {} }); },
-    sendData(d)  { if (this.isHost) this.broadcast(d); else if (this.activeConn) this.activeConn.send(d); },
+    // sendData: non-hosts send to host. Host feeds the message through its own handler
+    // so MOVE→MOVE_CONFIRM logic runs exactly once for everyone including the host.
+    sendData(d) {
+        if (this.isHost) {
+            // Simulate receiving our own message so it goes through the confirm pipeline
+            this._handleData(d);
+        } else if (this.activeConn) {
+            this.activeConn.send(d);
+        }
+    },
+    _handleData(data) {
+        // Minimal re-entrant handler for host's own submissions
+        if (data.type === 'MOVE') {
+            const nextTurn = (game.turnIndex + 1) % game.players.length;
+            const confirm = {
+                type: 'MOVE_CONFIRM',
+                move: data.move,
+                user: data.user,
+                oneClub: data.oneClub || false,
+                nextTurn
+            };
+            this.broadcast(confirm);
+            game.applyConfirmedMove(confirm);
+        } else if (data.type === 'ELIMINATE') {
+            this.broadcast(data);
+            this._applyEliminate(data);
+        }
+    },
+    _applyEliminate(data) {
+        const idx = game.players.indexOf(data.player);
+        if (idx !== -1) {
+            game.spectators.push(data.player);
+            game.players.splice(idx, 1);
+            ui.addLog("SYSTEM", `${data.player.toUpperCase()} eliminated! 🟥`, "eliminated");
+            ui.updateSpectatorBar(game.spectators);
+            if (game.players.length <= 1) {
+                const winner = game.players[0] || "Nobody";
+                this.broadcast({ type: 'WIN', winner });
+                game.win(winner);
+            } else {
+                if (game.turnIndex >= game.players.length) game.turnIndex = 0;
+                game.startTimer();
+            }
+        }
+    },
     broadcastStart() {
         this.broadcast({ type: 'START' });
         game.mode = 'online';
