@@ -88,10 +88,26 @@ const game = {
                 const loser = this.players[this.turnIndex];
                 ui.addLog("SYSTEM", `${loser.toUpperCase()} was too slow! 🟥`, "eliminated");
 
-                // In online mode, only the host drives eliminations to avoid double-firing
+                // Only host drives timeout eliminations to avoid all clients firing at once
                 if (this.mode === 'online' && !online.isHost) return;
                 if (this.mode === 'online') {
                     online.broadcast({ type: 'ELIMINATE', player: loser });
+                    // Host also applies it to itself via the same path
+                    const idx = game.players.indexOf(loser);
+                    if (idx !== -1) {
+                        game.spectators.push(loser);
+                        game.players.splice(idx, 1);
+                        ui.updateSpectatorBar(game.spectators);
+                        if (game.players.length <= 1) {
+                            const winner = game.players[0] || "Nobody";
+                            online.broadcast({ type: 'WIN', winner });
+                            game.win(winner);
+                        } else {
+                            if (game.turnIndex >= game.players.length) game.turnIndex = 0;
+                            game.startTimer();
+                        }
+                    }
+                    return;
                 }
                 this.eliminate();
             }
@@ -107,6 +123,7 @@ const game = {
         if (pMatch && pMatch.clubs.length === 1) {
             const onlyClub = pMatch.clubs[0];
             if (this.mode === 'online') {
+                // Send to host — everyone processes when MOVE_CONFIRM comes back
                 online.sendData({ type: 'MOVE', move: onlyClub, user: online.myName, oneClub: true });
             } else {
                 ui.addLog(this.players[this.turnIndex], `LOYALTY! -> ${onlyClub.toUpperCase()}`, "system");
@@ -122,9 +139,10 @@ const game = {
             const loser = this.players[this.turnIndex];
             ui.addLog("SYSTEM", `${loser.toUpperCase()} fake loyalty! 🟥`, "eliminated");
             if (this.mode === 'online') {
-                online.broadcast({ type: 'ELIMINATE', player: loser });
+                online.sendData({ type: 'ELIMINATE', player: loser });
+            } else {
+                this.eliminate();
             }
-            this.eliminate();
         }
     },
 
@@ -181,6 +199,8 @@ const game = {
 
         if (linked) {
             if (this.mode === 'online') {
+                // Send to host for validation & relay — do NOT process locally yet.
+                // Everyone (including sender) will process when the broadcast comes back.
                 online.sendData({ type: 'MOVE', move: val, user: online.myName });
             } else {
                 this.processMove(this.players[this.turnIndex], val);
@@ -189,9 +209,11 @@ const game = {
             const loser = this.players[this.turnIndex];
             ui.addLog("SYSTEM", `❌ Invalid link! ${loser.toUpperCase()} is eliminated! 🟥`, "eliminated");
             if (this.mode === 'online') {
-                online.broadcast({ type: 'ELIMINATE', player: loser });
+                // Send to host — everyone (including sender) will process via broadcast
+                online.sendData({ type: 'ELIMINATE', player: loser });
+            } else {
+                this.eliminate();
             }
-            this.eliminate();
         }
     },
 
@@ -333,24 +355,40 @@ const online = {
                 ui.updateLobby();
             }
 
-            // ── Game Start (Network Sync) ──
+            // ── Game Start ──
             if (data.type === 'START') {
                 game.mode = 'online';
                 game.init();
             }
 
-            // ── Move (Network Sync) ──
+            // ── Move: host validates, stamps canonical turnIndex, broadcasts to ALL ──
             if (data.type === 'MOVE') {
-                // Host relays moves to everyone else
-                if (this.isHost) this.broadcast(data);
+                if (this.isHost) {
+                    // Compute next turnIndex here so it's the same for everyone
+                    const nextTurn = (game.turnIndex + 1) % game.players.length;
+                    this.broadcast({
+                        type: 'MOVE_CONFIRM',
+                        move: data.move,
+                        user: data.user,
+                        oneClub: data.oneClub || false,
+                        nextTurn
+                    });
+                    // Host also applies it to itself
+                    game.processMove(data.user, data.move, data.oneClub || false);
+                }
+            }
+
+            // ── MOVE_CONFIRM: all non-host clients apply the move ──
+            if (data.type === 'MOVE_CONFIRM') {
+                // turnIndex comes from the host — overwrite local state so it never drifts
+                game.turnIndex = data.nextTurn - 1; // processMove will increment once more
+                if (game.turnIndex < 0) game.turnIndex = game.players.length - 1;
                 game.processMove(data.user, data.move, data.oneClub || false);
             }
 
-            // ── Elimination (Network Sync) ──
+            // ── Eliminate: host fans it out, everyone applies by player name ──
             if (data.type === 'ELIMINATE') {
-                // Host relays eliminations to everyone else
                 if (this.isHost) this.broadcast(data);
-                // Find and remove the named player on every client
                 const idx = game.players.indexOf(data.player);
                 if (idx !== -1) {
                     game.spectators.push(data.player);
@@ -358,7 +396,9 @@ const online = {
                     ui.addLog("SYSTEM", `${data.player.toUpperCase()} eliminated! 🟥`, "eliminated");
                     ui.updateSpectatorBar(game.spectators);
                     if (game.players.length <= 1) {
-                        game.win(game.players[0] || "Nobody");
+                        const winner = game.players[0] || "Nobody";
+                        if (this.isHost) this.broadcast({ type: 'WIN', winner });
+                        game.win(winner);
                     } else {
                         if (game.turnIndex >= game.players.length) game.turnIndex = 0;
                         game.startTimer();
@@ -366,7 +406,7 @@ const online = {
                 }
             }
 
-            // ── Win (Game Over Sync) ──
+            // ── Win ──
             if (data.type === 'WIN') {
                 game.win(data.winner);
             }
