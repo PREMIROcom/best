@@ -44,7 +44,7 @@ const game = {
 
     startTimer() {
         if (this.timer) clearInterval(this.timer);
-        this.timeLeft = 20; // CHANGE 1: Force timer back to 20 every time it starts
+        this.timeLeft = 20;
         this.updateUI();
         this.timer = setInterval(() => {
             this.timeLeft--;
@@ -140,24 +140,29 @@ const game = {
         if (this.used.length > this.lockLimit) this.used.shift(); 
     },
 
-    processMove(user, move) {
+    processMove(user, move, syncIndex = null) {
         ui.addLog(user, move, user === "AI Bot" ? "ai" : "player");
         this.target = move;
         this.addToUsed(move);
-        this.turnIndex = (this.turnIndex + 1) % this.players.length;
-        this.startTimer(); // CHANGE 2: Timer resets here for every turn
+        
+        // FIX: If a syncIndex is provided (from the host), use it. Otherwise, increment normally.
+        if (syncIndex !== null) {
+            this.turnIndex = syncIndex;
+        } else {
+            this.turnIndex = (this.turnIndex + 1) % this.players.length;
+        }
+        
+        this.startTimer(); 
         if (this.mode === 'ai' && this.players[this.turnIndex] === "AI Bot") setTimeout(() => this.aiThink(), 1200);
     },
         
     aiThink() {
         const targetClean = this.simplify(this.target);
         let choices = [];
-
         const player = database.players.find(p => this.simplify(p.name) === targetClean);
         if (player) {
             choices = player.clubs.filter(c => !this.used.includes(this.simplify(c)));
         }
-
         if (choices.length === 0) {
             const pP = database.players.filter(p => 
                 p.clubs.some(c => this.simplify(c) === targetClean) && 
@@ -165,8 +170,6 @@ const game = {
             );
             choices = pP.map(p => p.name);
         }
-
-        // CHANGE 3: AI picks a RANDOM answer from the valid choices
         if (choices.length > 0) {
             const pick = choices[Math.floor(Math.random() * choices.length)];
             this.submitMove(pick); 
@@ -229,11 +232,27 @@ const online = {
                 ui.updateLobby();
             }
             if (data.type === 'LOBBY') { game.players = data.list; ui.updateLobby(); }
-            if (data.type === 'START') { game.mode = 'online'; game.init(); }
             
-            // CHANGE 4: This is what makes the message show on all screens
+            // FIX: When starting, everyone starts at turnIndex 0
+            if (data.type === 'START') { 
+                game.mode = 'online'; 
+                game.turnIndex = 0; 
+                game.init(); 
+            }
+            
             if (data.type === 'MOVE') {
-                game.processMove(data.user, data.move);
+                // If I am the host, I decide the next turn and tell everyone
+                if (this.isHost) {
+                    game.processMove(data.user, data.move);
+                    this.broadcast({ type: 'SYNC_TURN', user: data.user, move: data.move, nextTurn: game.turnIndex });
+                } else {
+                    game.processMove(data.user, data.move);
+                }
+            }
+
+            // FIX: Guests receive the forced turn index from the host
+            if (data.type === 'SYNC_TURN') {
+                game.processMove(data.user, data.move, data.nextTurn);
             }
         });
     },
@@ -242,7 +261,12 @@ const online = {
         if (this.isHost) this.broadcast(d); 
         else if (this.activeConn && this.activeConn.open) this.activeConn.send(d); 
     },
-    broadcastStart() { this.broadcast({ type: 'START' }); game.mode = 'online'; game.init(); }
+    broadcastStart() { 
+        game.turnIndex = 0; // Host starts at 0
+        this.broadcast({ type: 'START' }); 
+        game.mode = 'online'; 
+        game.init(); 
+    }
 };
 
 // --- UI HELPERS ---
