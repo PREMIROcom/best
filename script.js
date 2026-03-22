@@ -1,7 +1,6 @@
 // --- DATABASE INITIALIZATION ---
 let database = { players: [] };
 
-// Professional Fetch: Loads 20,000 players from your separate file
 async function loadDatabase() {
     try {
         const response = await fetch('players.json');
@@ -10,7 +9,6 @@ async function loadDatabase() {
         console.log("Success! Loaded " + database.players.length + " players.");
     } catch (err) {
         console.error("Database error:", err);
-        // Fallback for testing if file is missing
         database.players = [{ name: "Cristiano Ronaldo", clubs: ["Real Madrid", "Juventus", "Al Nassr"] }];
     }
 }
@@ -46,7 +44,7 @@ const game = {
 
     startTimer() {
         if (this.timer) clearInterval(this.timer);
-        this.timeLeft = 20;
+        this.timeLeft = 20; // FIX: Ensure timer resets to 20
         this.updateUI();
         this.timer = setInterval(() => {
             this.timeLeft--;
@@ -100,7 +98,6 @@ const game = {
         this.startTimer();
     },
 
-    // UPDATED: Now removes all spaces during comparison
     simplify: (s) => s.toLowerCase().replace(/\s+/g, "").replace(/[^a-z0-9]/g, ""),
 
     handleInput() {
@@ -126,8 +123,12 @@ const game = {
         }
 
         if (linked) {
-            if (this.mode === 'online') online.sendData({ type: 'MOVE', move: val, user: online.myName });
-            else this.processMove(this.players[this.turnIndex], val);
+            if (this.mode === 'online') {
+                online.sendData({ type: 'MOVE', move: val, user: online.myName });
+                this.processMove(online.myName, val); // FIX: Update local screen immediately
+            } else {
+                this.processMove(this.players[this.turnIndex], val);
+            }
         } else {
             this.eliminate();
         }
@@ -144,26 +145,34 @@ const game = {
         this.target = move;
         this.addToUsed(move);
         this.turnIndex = (this.turnIndex + 1) % this.players.length;
-        this.startTimer();
+        this.startTimer(); // FIX: Restarts timer for every turn
         if (this.mode === 'ai' && this.players[this.turnIndex] === "AI Bot") setTimeout(() => this.aiThink(), 1200);
     },
         
     aiThink() {
         const targetClean = this.simplify(this.target);
-        let choice = null;
-        const player = database.players.find(p => this.simplify(p.name) === targetClean);
-        if (player) choice = player.clubs.find(c => !this.used.includes(this.simplify(c)));
+        let validChoices = [];
 
-        if (!choice) {
-            const pP = database.players.find(p => 
+        const player = database.players.find(p => this.simplify(p.name) === targetClean);
+        if (player) {
+            validChoices = player.clubs.filter(c => !this.used.includes(this.simplify(c)));
+        }
+
+        if (validChoices.length === 0) {
+            const pP = database.players.filter(p => 
                 p.clubs.some(c => this.simplify(c) === targetClean) && 
                 !this.used.includes(this.simplify(p.name))
             );
-            if (pP) choice = pP.name;
+            validChoices = pP.map(p => p.name);
         }
 
-        if (choice) this.submitMove(choice); 
-        else this.eliminate();
+        // FIX: Pick a RANDOM choice instead of just the first one
+        if (validChoices.length > 0) {
+            const choice = validChoices[Math.floor(Math.random() * validChoices.length)];
+            this.submitMove(choice); 
+        } else {
+            this.eliminate();
+        }
     },
 
     eliminate() {
@@ -173,7 +182,7 @@ const game = {
             this.win(this.players[0] || "Nobody");
         } else {
             if (this.turnIndex >= this.players.length) this.turnIndex = 0;
-            this.startTimer();
+            this.startTimer(); // FIX: Reset timer for the next player
             if (this.mode === 'ai' && this.players[this.turnIndex] === "AI Bot") setTimeout(() => this.aiThink(), 1000);
         }
     },
@@ -187,7 +196,7 @@ const game = {
 
 // --- ONLINE / MULTIPLAYER LOGIC ---
 const online = {
-    peer: null, connections: [], myName: "", isHost: false,
+    peer: null, connections: [], myName: "", isHost: false, activeConn: null,
     createRoom() {
         this.myName = document.getElementById('player-nickname').value || "Host";
         const code = Math.floor(1000 + Math.random() * 9000).toString();
@@ -205,10 +214,14 @@ const online = {
         const code = document.getElementById('join-id').value;
         this.myName = document.getElementById('player-nickname').value || "Guest";
         this.peer = new Peer();
-        this.peer.on('open', () => { this.setup(this.peer.connect(code)); });
+        this.peer.on('open', () => { 
+            const c = this.peer.connect(code);
+            this.activeConn = c;
+            this.setup(c); 
+        });
     },
     setup(c) {
-        c.on('open', () => { if (!this.isHost) { this.activeConn = c; c.send({ type: 'JOIN', name: this.myName }); } });
+        c.on('open', () => { if (!this.isHost) { c.send({ type: 'JOIN', name: this.myName }); } });
         c.on('data', data => {
             if (data.type === 'JOIN' && this.isHost) {
                 game.players.push(data.name);
@@ -217,11 +230,17 @@ const online = {
             }
             if (data.type === 'LOBBY') { game.players = data.list; ui.updateLobby(); }
             if (data.type === 'START') { game.mode = 'online'; game.init(); }
-            if (data.type === 'MOVE') game.processMove(data.user, data.move);
+            // FIX: When a MOVE is received, update the log and restart the timer on this screen
+            if (data.type === 'MOVE') {
+                game.processMove(data.user, data.move);
+            }
         });
     },
-    broadcast(d) { this.connections.forEach(c => c.send(d)); },
-    sendData(d) { if (this.isHost) this.broadcast(d); else this.activeConn.send(d); },
+    broadcast(d) { this.connections.forEach(c => { if(c.open) c.send(d); }); },
+    sendData(d) { 
+        if (this.isHost) this.broadcast(d); 
+        else if (this.activeConn && this.activeConn.open) this.activeConn.send(d); 
+    },
     broadcastStart() { this.broadcast({ type: 'START' }); game.mode = 'online'; game.init(); }
 };
 
@@ -264,25 +283,20 @@ inputField.addEventListener('input', (e) => {
     const val = e.target.value.toLowerCase().trim();
     suggBox.innerHTML = '';
     
-    // UPDATED: Now starts searching on the first character
     if (val.length < 1) { 
         suggBox.style.display = 'none'; 
         return; 
     }
 
-    // UPDATED: Clean spaces from typing
     const cleanSearch = val.replace(/\s+/g, "");
 
     const matches = [];
     for (let i = 0; i < database.players.length; i++) {
         const p = database.players[i];
-        
-        // UPDATED: Clean spaces from database player names
         const cleanPlayer = p.name.toLowerCase().replace(/\s+/g, "");
         if (cleanPlayer.includes(cleanSearch)) matches.push(p.name);
         
         for (let j = 0; j < p.clubs.length; j++) {
-            // UPDATED: Clean spaces from database club names
             const cleanClub = p.clubs[j].toLowerCase().replace(/\s+/g, "");
             if (cleanClub.includes(cleanSearch)) matches.push(p.clubs[j]);
         }
