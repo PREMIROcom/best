@@ -44,7 +44,7 @@ const game = {
 
     startTimer() {
         if (this.timer) clearInterval(this.timer);
-        this.timeLeft = 20; // FIX: Ensure timer resets to 20
+        this.timeLeft = 20; // CHANGE 1: Force timer back to 20 every time it starts
         this.updateUI();
         this.timer = setInterval(() => {
             this.timeLeft--;
@@ -125,7 +125,7 @@ const game = {
         if (linked) {
             if (this.mode === 'online') {
                 online.sendData({ type: 'MOVE', move: val, user: online.myName });
-                this.processMove(online.myName, val); // FIX: Update local screen immediately
+                this.processMove(online.myName, val); 
             } else {
                 this.processMove(this.players[this.turnIndex], val);
             }
@@ -145,31 +145,31 @@ const game = {
         this.target = move;
         this.addToUsed(move);
         this.turnIndex = (this.turnIndex + 1) % this.players.length;
-        this.startTimer(); // FIX: Restarts timer for every turn
+        this.startTimer(); // CHANGE 2: Timer resets here for every turn
         if (this.mode === 'ai' && this.players[this.turnIndex] === "AI Bot") setTimeout(() => this.aiThink(), 1200);
     },
         
     aiThink() {
         const targetClean = this.simplify(this.target);
-        let validChoices = [];
+        let choices = [];
 
         const player = database.players.find(p => this.simplify(p.name) === targetClean);
         if (player) {
-            validChoices = player.clubs.filter(c => !this.used.includes(this.simplify(c)));
+            choices = player.clubs.filter(c => !this.used.includes(this.simplify(c)));
         }
 
-        if (validChoices.length === 0) {
+        if (choices.length === 0) {
             const pP = database.players.filter(p => 
                 p.clubs.some(c => this.simplify(c) === targetClean) && 
                 !this.used.includes(this.simplify(p.name))
             );
-            validChoices = pP.map(p => p.name);
+            choices = pP.map(p => p.name);
         }
 
-        // FIX: Pick a RANDOM choice instead of just the first one
-        if (validChoices.length > 0) {
-            const choice = validChoices[Math.floor(Math.random() * validChoices.length)];
-            this.submitMove(choice); 
+        // CHANGE 3: AI picks a RANDOM answer from the valid choices
+        if (choices.length > 0) {
+            const pick = choices[Math.floor(Math.random() * choices.length)];
+            this.submitMove(pick); 
         } else {
             this.eliminate();
         }
@@ -182,7 +182,7 @@ const game = {
             this.win(this.players[0] || "Nobody");
         } else {
             if (this.turnIndex >= this.players.length) this.turnIndex = 0;
-            this.startTimer(); // FIX: Reset timer for the next player
+            this.startTimer();
             if (this.mode === 'ai' && this.players[this.turnIndex] === "AI Bot") setTimeout(() => this.aiThink(), 1000);
         }
     },
@@ -230,7 +230,8 @@ const online = {
             }
             if (data.type === 'LOBBY') { game.players = data.list; ui.updateLobby(); }
             if (data.type === 'START') { game.mode = 'online'; game.init(); }
-            // FIX: When a MOVE is received, update the log and restart the timer on this screen
+            
+            // CHANGE 4: This is what makes the message show on all screens
             if (data.type === 'MOVE') {
                 game.processMove(data.user, data.move);
             }
