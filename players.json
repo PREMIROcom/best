@@ -51,7 +51,7 @@
   { "name": "Edinson Cavani", "clubs": ["Danubio", "Palermo", "Napoli", "PSG", "Manchester United", "Valencia", "Boca Juniors"] },
   { "name": "Arthur Melo", "clubs": ["Gremio", "Barcelona", "Juventus", "Liverpool", "Fiorentina"] },
   { "name": "Mario Gotze", "clubs": ["Dortmund", "Bayern Munich", "PSV", "Eintracht Frankfurt"] },
-  { "name": "Mats Hummels", "clubs": ["Bayern Munich", "Dortmund", "Roma"] },
+  { "name": "Mats Hummels", "clubs": ["Bayern Munich", "Dortmund", "Roma"] }, 
   { "name": "Isco", "clubs": ["Valencia", "Malaga", "Real Madrid", "Sevilla", "Real Betis"] },
   { "name": "Achraf Hakimi", "clubs": ["Real Madrid", "Dortmund", "Inter Milan", "PSG"] },
   { "name": "Hakim Ziyech", "clubs": ["Heerenveen", "Twente", "Ajax", "Chelsea", "Galatasaray"] },
@@ -209,7 +209,7 @@
   { "name": "Dani Olmo", "clubs": ["Dinamo Zagreb", "Leipzig", "Barca"] },
   { "name": "Radamel Falcao", "clubs": ["River Plate", "Porto", "Atletico Madrid", "Monaco", "Man United", "Chelsea", "Galatasaray", "Rayo Vallecano", "Millonarios"] },
   { "name": "Christian Vieri", "clubs": ["Torino", "Pisa", "Ravenna", "Venezia", "Atalanta", "Juventus", "Atletico Madrid", "Lazio", "Inter Milan", "AC Milan", "Monaco", "Fiorentina"] },
-  { "name": "Ronaldo Nazario", "clubs": ["Cruzeiro", "PSV", "Barcelona", "Inter Milan", "Real Madrid", "AC Milan", "Corinthians"] },
+  { "name": "Ronaldo Nazario", "clubs": ["Cruzeiro", "PSV", "Barcelona", "Inter Milan", "Real Madrid", " Milan", "Corinthians"] },
   { "name": "Arturo Vidal", "clubs": ["Colo-Colo", "Bayer Leverkusen", "Juventus", "Bayern Munich", "Barcelona", "Inter Milan", "Flamengo", "Athletico Paranaense"] },
   { "name": "Xherdan Shaqiri", "clubs": ["Basel", "Bayern Munich", "Inter Milan", "Stoke City", "Liverpool", "Lyon", "Chicago Fire"] },
   { "name": "Ivan Perisic", "clubs": ["Club Brugge", "Dortmund", "Wolfsburg", "Inter Milan", "Bayern Munich", "Tottenham", "Hajduk Split", "PSV"] },
@@ -255,4 +255,4 @@
   { "name": "Claude Makelele", "clubs": ["Nantes", "Marseille", "Celta Vigo", "Real Madrid", "Chelsea", "PSG"] },
   { "name": "Fernando Morientes", "clubs": ["Albacete", "Zaragoza", "Real Madrid", "Monaco", "Liverpool", "Valencia", "Marseille"] },
   { "name": "Steve McManaman", "clubs": ["Liverpool", "Real Madrid", "Manchester City"] }
-]
+  ]
